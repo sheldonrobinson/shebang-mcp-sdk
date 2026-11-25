@@ -1,0 +1,82 @@
+{
+    "$schema":  "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+    "name":  "io.github.sheldonrobinson/shebang-mcp-sdk",
+    "title":  "Shebang MCP SDK",
+    "description":  "Generic Shebang MCP SDK server implementing the Model Context Protocol (MCP) over stdio and streamable-http transports.",
+    "version":  "1.0.0",
+    "websiteUrl":  "https://sheldonrobinson.github.io/shebang-mcp-sdk",
+    "repository":  {
+                       "url":  "https://github.com/sheldonrobinson/shebang-mcp-sdk",
+                       "source":  "github"
+                   },
+    "packages":  [
+                     {
+                         "registryType":  "mcpb",
+                         "identifier":  "https://github.com/sheldonrobinson/shebang-mcp-sdk/releases/download/v1.0.0/shebang-mcp-sdk.sh.mcpb",
+                         "version":  "1.0.0",
+                         "fileSha256":  "PLACEHOLDER_SHA256",
+                         "runtimeHint":  "sh",
+                         "transport":  {
+                                           "type":  "stdio"
+                                       },
+                         "packageArguments":  [
+                                                  {
+                                                      "type":  "named",
+                                                      "name":  "--stdio",
+                                                      "description":  "Run the POSIX sh MCP SDK server over standard input/output (stdio)"
+                                                  }
+                                              ],
+                         "environmentVariables":  [
+                                                      {
+                                                          "name":  "MCP_TRANSPORT",
+                                                          "description":  "Transport protocol: stdio or streamable-http",
+                                                          "isRequired":  false
+                                                      },
+                                                      {
+                                                          "name":  "MCP_SERVER_NAME",
+                                                          "description":  "MCP server name reported during initialize",
+                                                          "isRequired":  false
+                                                      },
+                                                      {
+                                                          "name":  "MCP_SERVER_VERSION",
+                                                          "description":  "MCP server version reported during initialize",
+                                                          "isRequired":  false
+                                                      }
+                                                  ]
+                     },
+                     {
+                         "registryType":  "mcpb",
+                         "identifier":  "https://github.com/sheldonrobinson/shebang-mcp-sdk/releases/download/v1.0.0/shebang-mcp-sdk.pwsh.mcpb",
+                         "version":  "1.0.0",
+                         "fileSha256":  "PLACEHOLDER_SHA256",
+                         "runtimeHint":  "pwsh",
+                         "transport":  {
+                                           "type":  "stdio"
+                                       },
+                         "packageArguments":  [
+                                                  {
+                                                      "type":  "named",
+                                                      "name":  "-Stdio",
+                                                      "description":  "Run the PowerShell MCP SDK server over standard input/output (stdio)"
+                                                  }
+                                              ],
+                         "environmentVariables":  [
+                                                      {
+                                                          "name":  "MCP_TRANSPORT",
+                                                          "description":  "Transport protocol: stdio or streamable-http",
+                                                          "isRequired":  false
+                                                      },
+                                                      {
+                                                          "name":  "MCP_SERVER_NAME",
+                                                          "description":  "MCP server name reported during initialize",
+                                                          "isRequired":  false
+                                                      },
+                                                      {
+                                                          "name":  "MCP_SERVER_VERSION",
+                                                          "description":  "MCP server version reported during initialize",
+                                                          "isRequired":  false
+                                                      }
+                                                  ]
+                     }
+                 ]
+}

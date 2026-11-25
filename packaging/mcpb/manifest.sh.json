@@ -1,0 +1,54 @@
+{
+  "manifest_version": "0.3",
+  "name": "shebang-mcp-sdk.sh",
+  "display_name": "Shebang MCP SDK (POSIX sh / Bash)",
+  "version": "1.0.0",
+  "description": "Generic Shebang MCP SDK server (POSIX sh / Bash edition for Linux/macOS) implementing the Model Context Protocol (MCP) over stdio and streamable-http transports.",
+  "author": {
+    "name": "sheldonrobinson",
+    "email": "sheldon.robinson@gmail.com",
+    "url": "https://github.com/sheldonrobinson"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sheldonrobinson/shebang-mcp-sdk.git"
+  },
+  "homepage": "https://sheldonrobinson.github.io/shebang-mcp-sdk",
+  "documentation": "https://sheldonrobinson.github.io/shebang-mcp-sdk/deploy.html",
+  "license": "MIT",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "sdk",
+    "bash",
+    "shell",
+    "stdio",
+    "streamable-http"
+  ],
+  "compatibility": {
+    "platforms": [
+      "linux",
+      "darwin"
+    ]
+  },
+  "server": {
+    "type": "binary",
+    "entry_point": "bin/shebang-mcp-sdk.sh",
+    "mcp_config": {
+      "command": "bash",
+      "args": [
+        "-c",
+        "command -v jq >/dev/null 2>&1 || { for d in /opt/homebrew/bin /usr/local/bin; do [ -d \"$d\" ] && [ \"${PATH#*$d}\" = \"$PATH\" ] && PATH=\"$d:$PATH\"; done; export PATH; }; exec bash \"$0\" \"$@\"",
+        "${__dirname}/bin/script-runner.sh",
+        "shebang-mcp-sdk",
+        "--stdio"
+      ],
+      "env": {
+        "MCP_TRANSPORT": "stdio",
+        "MCP_SERVER_NAME": "shebang-mcp-sdk",
+        "MCP_SERVER_VERSION": "1.0.0"
+      }
+    }
+  },
+  "tools": []
+}

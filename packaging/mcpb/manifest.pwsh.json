@@ -1,0 +1,56 @@
+{
+  "manifest_version": "0.3",
+  "name": "shebang-mcp-sdk.pwsh",
+  "display_name": "Shebang MCP SDK (PowerShell)",
+  "version": "1.0.0",
+  "description": "Generic Shebang MCP SDK server (PowerShell edition for Windows) implementing the Model Context Protocol (MCP) over stdio and streamable-http transports.",
+  "author": {
+    "name": "sheldonrobinson",
+    "email": "sheldon.robinson@gmail.com",
+    "url": "https://github.com/sheldonrobinson"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sheldonrobinson/shebang-mcp-sdk.git"
+  },
+  "homepage": "https://sheldonrobinson.github.io/shebang-mcp-sdk",
+  "documentation": "https://sheldonrobinson.github.io/shebang-mcp-sdk/deploy.html",
+  "license": "MIT",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "sdk",
+    "powershell",
+    "pwsh",
+    "stdio",
+    "streamable-http"
+  ],
+  "compatibility": {
+    "platforms": [
+      "win32"
+    ]
+  },
+  "server": {
+    "type": "binary",
+    "entry_point": "bin/shebang-mcp-sdk.ps1",
+    "mcp_config": {
+      "command": "pwsh",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${__dirname}/bin/script-runner.ps1",
+        "--use-pwsh",
+        "shebang-mcp-sdk",
+        "--stdio"
+      ],
+      "env": {
+        "MCP_TRANSPORT": "stdio",
+        "MCP_SERVER_NAME": "shebang-mcp-sdk",
+        "MCP_SERVER_VERSION": "1.0.0"
+      }
+    }
+  },
+  "tools": []
+}

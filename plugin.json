@@ -1,0 +1,34 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "shebang-mcp-sdk",
+  "version": "1.0.0",
+  "description": "Shebang MCP SDK - the Model Context Protocol (MCP) SDK for shell environments (POSIX sh/Bash & PowerShell), analogous to python-sdk for Python and @modelcontextprotocol/sdk for TypeScript. Contains NO application-specific logic — consumers override tool handlers via global functions. Integrates with the MCP Builder Skill for building production MCP servers.",
+  "author": {
+    "name": "sheldonrobinson",
+    "email": "sheldon.robinson@gmail.com",
+    "url": "https://github.com/sheldonrobinson"
+  },
+  "homepage": "https://sheldonrobinson.github.io/shebang-mcp-sdk",
+  "repository": "https://github.com/sheldonrobinson/shebang-mcp-sdk",
+  "license": "MIT",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "sdk",
+    "bash",
+    "powershell",
+    "stdio",
+    "streamable-http",
+    "agent-plugin",
+    "mcp-builder"
+  ],
+  "extensions": {
+    "io.github.sheldonrobinson.shebang-mcp-builder": {
+      "hooks": "./io.github.sheldonrobinson.shebang-mcp-builder/hooks/hooks.json",
+      "commands": [
+        "./io.github.sheldonrobinson.shebang-mcp-builder/commands/sdk-help.md"
+      ]
+    }
+  }
+}
+

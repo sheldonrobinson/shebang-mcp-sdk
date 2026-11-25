@@ -1,0 +1,15 @@
+{
+  "description": "Shebang MCP SDK harness-agnostic stop hook for clean MCP server shutdown",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${PLUGIN_ROOT}/bin/script-runner stop-hook"
+          }
+        ]
+      }
+    ]
+  }
+}

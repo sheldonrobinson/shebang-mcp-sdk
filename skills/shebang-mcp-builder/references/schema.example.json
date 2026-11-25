@@ -1,0 +1,31 @@
+{
+  "$schema": "https://sheldonrobinson.github.io/shebang-mcp-sdk/schemas/tool-schema.json",
+  "version": "1.0.0",
+  "server": {
+    "name": "my-mcp-server",
+    "version": "1.0.0",
+    "description": "My custom MCP server built on shebang-mcp-sdk",
+    "transport": "stdio",
+    "protocolVersion": "2025-03-26"
+  },
+  "tools": [
+    {
+      "name": "my_tool",
+      "description": "Does something useful",
+      "parameters": [
+        {
+          "name": "input_text",
+          "type": "string",
+          "description": "Text to process",
+          "required": true
+        },
+        {
+          "name": "max_length",
+          "type": "number",
+          "description": "Maximum output length",
+          "required": false
+        }
+      ]
+    }
+  ]
+}

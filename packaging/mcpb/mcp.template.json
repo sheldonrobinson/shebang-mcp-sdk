@@ -1,0 +1,20 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "mcpServers": {
+    "shebang-mcp-sdk": {
+      "type": "stdio",
+      "command": "{{MCP_STDIO_COMMAND}}",
+      "args": {{MCP_STDIO_ARGS_JSON}},
+      "cwd": "${PLUGIN_ROOT}",
+      "env": {
+        "MCP_TRANSPORT": "stdio",
+        "MCP_SERVER_NAME": "shebang-mcp-sdk",
+        "MCP_SERVER_VERSION": "1.0.0"
+      }
+    },
+    "shebang-mcp-sdk-http": {
+      "type": "streamable-http",
+      "url": "http://127.0.0.1:8080/mcp"
+    }
+  }
+}
