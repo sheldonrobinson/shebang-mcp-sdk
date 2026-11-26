@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version (e.g., 1.1.0). Defaults to plugin.json version or git tag."
+        description: "Release version (e.g., 1.0.0). Defaults to plugin.json version or git tag."
         required: false
         type: string
       publish_registry:
@@ -43,7 +43,7 @@ jobs:
           elif [[ -n "${{ github.event.release.tag_name }}" ]]; then
             RAW_VER="${{ github.event.release.tag_name }}"
           else
-            RAW_VER="$(jq -r '.version // "1.1.0"' plugin.json)"
+            RAW_VER="$(jq -r '.version // "1.0.0"' plugin.json)"
           fi
           VERSION="${RAW_VER#v}"
           TAG="v${VERSION}"
