@@ -5,7 +5,16 @@
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PLUGIN_ROOT="${PLUGIN_ROOT:-$(cd "${SCRIPT_DIR}/../../.." 2>/dev/null && pwd || pwd)}"
+if [ -z "${PLUGIN_ROOT:-}" ]; then
+  for relative_root in .. ../../.. ../../../..; do
+    candidate_root="$(cd "${SCRIPT_DIR}/${relative_root}" 2>/dev/null && pwd || true)"
+    if [ -n "${candidate_root}" ] && [ -d "${candidate_root}/bin" ]; then
+      PLUGIN_ROOT="${candidate_root}"
+      break
+    fi
+  done
+  PLUGIN_ROOT="${PLUGIN_ROOT:-$(cd "${SCRIPT_DIR}/../../.." 2>/dev/null && pwd || pwd)}"
+fi
 export PLUGIN_ROOT
 
 if [ ! -d "${PLUGIN_ROOT}/bin" ]; then

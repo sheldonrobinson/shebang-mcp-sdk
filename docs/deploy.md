@@ -9,9 +9,51 @@ Full installation, MCP configuration, and Streamable HTTP service setup for the 
 
 ## Installation
 
-### Install Skill (`.agents/skills/`)
+### Native install (recommended)
 
-Per the [Agent Skills Specification](https://agentskills.io/specification):
+Run the PowerShell 5.1+ installer from the repository root:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+# Or: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+The default destinations are:
+
+- Full plugin: `$HOME/.agents/shebang-mcp-sdk/`
+- Self-contained canonical skill: `$HOME/.agents/skills/shebang-mcp-builder/`
+
+The canonical skill includes `bin/` and `io.github.sheldonrobinson.shebang-mcp-builder/`, so its setup, generation, and server commands work without a separate `PLUGIN_ROOT`. The full plugin additionally contains `packaging/` and the distribution manifests.
+
+For temporary validation, place both destinations below a temporary base:
+
+```powershell
+pwsh -NoProfile -File .\install.ps1 -AgentsRoot C:\Temp\shebang-agents
+```
+
+Or select independent destinations explicitly:
+
+```powershell
+pwsh -NoProfile -File .\install.ps1 `
+  -PluginRoot C:\Tools\shebang-mcp-sdk `
+  -SkillRoot C:\Tools\skills\shebang-mcp-builder
+```
+
+Repeated installs mirror managed directories, so updated files replace older copies and stale files are removed. The installer rejects filesystem roots, nested plugin/skill destinations, and source/destination overlap. When using a staged full plugin directly, set `PLUGIN_ROOT` to its path; the self-contained canonical skill detects its own root automatically.
+
+POSIX runtime and packaging require `jq`. Install `socat` or `nc` as well for POSIX streamable-http mode.
+
+### Basher Install
+
+```bash
+./package.sh
+```
+
+Basher installs the same self-contained canonical runtime, including `bin/` and the hook/command directory.
+
+### Skill-only manual install
+
+Per the [Agent Skills Specification](https://agentskills.io/specification), you can copy only the discoverable skill:
 
 ```bash
 # Project-level install
@@ -24,19 +66,13 @@ New-Item -ItemType Directory -Path .agents/skills -Force | Out-Null
 Copy-Item -Recurse -Force skills/shebang-mcp-builder .agents/skills/shebang-mcp-builder
 ```
 
-This copies only the discoverable skill, not the SDK runtime. Set `PLUGIN_ROOT` to a full shebang-mcp-sdk checkout containing `bin/` before running setup, generation, or server commands:
+A skill-only copy does not include the SDK runtime. Set `PLUGIN_ROOT` to a full shebang-mcp-sdk checkout or installed plugin containing `bin/` before running setup, generation, or server commands:
 
 ```bash
 export PLUGIN_ROOT=/absolute/path/to/shebang-mcp-sdk
 ```
 ```powershell
 $env:PLUGIN_ROOT = 'C:\path\to\shebang-mcp-sdk'
-```
-
-### Basher Install
-
-```bash
-./package.sh
 ```
 
 ## MCP Configuration (`mcp.json`)

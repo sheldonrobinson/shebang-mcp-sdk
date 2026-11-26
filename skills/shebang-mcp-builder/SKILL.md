@@ -18,7 +18,18 @@ metadata:
 
 ## Installation (Canonical `.agents/skills/` Path)
 
-Per the [Agent Skills Specification](https://agentskills.io/specification), install this skill to the canonical cross-client `.agents/skills/` directory so any Agent Skills-compatible client discovers it automatically:
+Per the [Agent Skills Specification](https://agentskills.io/specification), install this skill to the canonical cross-client `.agents/skills/` directory so any Agent Skills-compatible client discovers it automatically.
+
+From the repository root, the native PowerShell 5.1+ installer installs both the full plugin and a self-contained canonical skill:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+# Or: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+The canonical `$HOME/.agents/skills/shebang-mcp-builder/` copy includes `bin/` and the hook/command runtime, so setup, generation, and server commands detect the skill root without requiring `PLUGIN_ROOT`. Use `-AgentsRoot` for an alternate base, or `-PluginRoot` and `-SkillRoot` for independent destinations. Repeated installs mirror managed directories and remove stale files.
+
+For an intentionally skill-only manual copy:
 
 - **Project-level install (`<project>/.agents/skills/shebang-mcp-builder/`):**
   ```bash
@@ -30,7 +41,7 @@ Per the [Agent Skills Specification](https://agentskills.io/specification), inst
   Copy-Item -Recurse -Force skills/shebang-mcp-builder .agents/skills/shebang-mcp-builder
   ```
 
-This copies only the discoverable skill, not the SDK runtime. Set `PLUGIN_ROOT` to a full shebang-mcp-sdk checkout containing `bin/` before running setup, generation, or server commands:
+A skill-only copy does not include the SDK runtime. Set `PLUGIN_ROOT` to a full shebang-mcp-sdk checkout or installed plugin containing `bin/` before running setup, generation, or server commands:
 
 ```bash
 export PLUGIN_ROOT=/absolute/path/to/shebang-mcp-sdk

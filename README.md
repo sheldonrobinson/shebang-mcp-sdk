@@ -37,9 +37,32 @@ Native implementations for:
 **Deprecated features (explicitly NOT implemented):**
 - Legacy HTTP+SSE transport
 
-## Install Skill (`.agents/skills/`)
+## Installation
 
-Per the [Agent Skills Specification](https://agentskills.io/specification), install the skill to `.agents/skills/`:
+### Native install (recommended)
+
+From the repository root, use the PowerShell 5.1+ installer:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+# Or: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+This installs the full plugin to `$HOME/.agents/shebang-mcp-sdk/` and a self-contained canonical skill to `$HOME/.agents/skills/shebang-mcp-builder/`. The canonical skill includes `bin/` and the hook/command runtime, so setup, generation, and server commands do not require a separate `PLUGIN_ROOT` setting.
+
+Use `-AgentsRoot` for an alternate base, or `-PluginRoot` and `-SkillRoot` for independent destinations:
+
+```powershell
+pwsh -NoProfile -File .\install.ps1 -AgentsRoot C:\Temp\shebang-agents
+```
+
+Repeated installs mirror managed directories, updating files and removing stale content. Filesystem roots and overlapping source/destination paths are rejected.
+
+POSIX runtime and packaging require `jq`; streamable-http mode also requires `socat` or `nc`.
+
+### Skill-only manual install
+
+Per the [Agent Skills Specification](https://agentskills.io/specification), you can copy only the discoverable skill to `.agents/skills/`:
 
 ```bash
 # Project-level (.agents/skills/) or User-level (~/.agents/skills/)
@@ -51,7 +74,7 @@ New-Item -ItemType Directory -Path .agents/skills -Force | Out-Null
 Copy-Item -Recurse -Force skills/shebang-mcp-builder .agents/skills/shebang-mcp-builder
 ```
 
-This copies only the discoverable skill, not the SDK runtime. Set `PLUGIN_ROOT` to a full shebang-mcp-sdk checkout containing `bin/` before running setup, generation, or server commands:
+A skill-only copy does not include the SDK runtime. Set `PLUGIN_ROOT` to a full shebang-mcp-sdk checkout or installed plugin containing `bin/` before running setup, generation, or server commands:
 
 ```bash
 export PLUGIN_ROOT=/absolute/path/to/shebang-mcp-sdk
@@ -135,6 +158,7 @@ shebang-mcp-sdk/
 +-- mcp.json                          # MCP Server configurations
 +-- server.json                       # Official MCP Registry manifest
 +-- package.sh                        # Basher install script and BINS/DEPS metadata
++-- install.ps1                       # Native PowerShell 5.1+ installer
 +-- LICENSE
 +-- README.md
 ```

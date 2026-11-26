@@ -35,6 +35,7 @@ function Resolve-TargetScripts {
     $stripped = $TargetName -replace "\.(ps1|sh)$", ""
     $candidates = @(
         [System.IO.Path]::Combine($PluginRoot, "bin", $stripped),
+        [System.IO.Path]::Combine($PluginRoot, "scripts", $stripped),
         [System.IO.Path]::Combine($PluginRoot, ".agents", "skills", "shebang-mcp-builder", "scripts", $stripped),
         [System.IO.Path]::Combine($PluginRoot, "skills", "shebang-mcp-builder", "scripts", $stripped),
         [System.IO.Path]::Combine($PluginRoot, "io.github.sheldonrobinson.shebang-mcp-builder", "hooks", $stripped),
@@ -226,6 +227,7 @@ resolve_target_base() {
 
     for candidate in \
         "${PLUGIN_ROOT}/bin/${stripped}" \
+        "${PLUGIN_ROOT}/scripts/${stripped}" \
         "${PLUGIN_ROOT}/.agents/skills/shebang-mcp-builder/scripts/${stripped}" \
         "${PLUGIN_ROOT}/skills/shebang-mcp-builder/scripts/${stripped}" \
         "${PLUGIN_ROOT}/io.github.sheldonrobinson.shebang-mcp-builder/hooks/${stripped}" \

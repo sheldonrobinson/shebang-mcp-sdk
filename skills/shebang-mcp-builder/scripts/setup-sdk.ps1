@@ -6,7 +6,23 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$PluginRoot = if ($env:PLUGIN_ROOT) { $env:PLUGIN_ROOT } else { (Resolve-Path (Join-Path $ScriptDir "../../..")).Path }
+$PluginRoot = if ($env:PLUGIN_ROOT) {
+    $env:PLUGIN_ROOT
+} else {
+    $detectedRoot = $null
+    foreach ($relativeRoot in @('..', '..\..\..', '..\..\..\..')) {
+        $candidateRoot = (Resolve-Path (Join-Path $ScriptDir $relativeRoot)).Path
+        if (Test-Path -LiteralPath (Join-Path $candidateRoot 'bin') -PathType Container) {
+            $detectedRoot = $candidateRoot
+            break
+        }
+    }
+    if ($detectedRoot) {
+        $detectedRoot
+    } else {
+        (Resolve-Path (Join-Path $ScriptDir '../../..')).Path
+    }
+}
 $env:PLUGIN_ROOT = $PluginRoot
 
 if (-not (Test-Path -LiteralPath (Join-Path $PluginRoot 'bin') -PathType Container)) {
