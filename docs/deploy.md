@@ -16,12 +16,21 @@ Per the [Agent Skills Specification](https://agentskills.io/specification):
 ```bash
 # Project-level install
 mkdir -p .agents/skills
-cp -R skills/shebang-mcp-sdk .agents/skills/shebang-mcp-sdk
+cp -R skills/shebang-mcp-builder .agents/skills/shebang-mcp-builder
 ```
 
 ```powershell
 New-Item -ItemType Directory -Path .agents/skills -Force | Out-Null
-Copy-Item -Recurse -Force skills/shebang-mcp-sdk .agents/skills/shebang-mcp-sdk
+Copy-Item -Recurse -Force skills/shebang-mcp-builder .agents/skills/shebang-mcp-builder
+```
+
+This copies only the discoverable skill, not the SDK runtime. Set `PLUGIN_ROOT` to a full shebang-mcp-sdk checkout containing `bin/` before running setup, generation, or server commands:
+
+```bash
+export PLUGIN_ROOT=/absolute/path/to/shebang-mcp-sdk
+```
+```powershell
+$env:PLUGIN_ROOT = 'C:\path\to\shebang-mcp-sdk'
 ```
 
 ### Basher Install
@@ -39,8 +48,8 @@ Add the appropriate server entry to your MCP client's `mcp.json`:
   "mcpServers": {
     "shebang-mcp-sdk": {
       "type": "stdio",
-      "command": "./bin/script-runner",
-      "args": ["shebang-mcp-sdk", "--stdio"],
+      "command": "sh",
+      "args": ["${PLUGIN_ROOT}/bin/shebang-mcp-sdk.sh", "--stdio"],
       "cwd": "${PLUGIN_ROOT}",
       "env": {
         "MCP_TRANSPORT": "stdio",
@@ -67,9 +76,9 @@ The Streamable HTTP server runs as an independent HTTP service that must be star
 ./bin/shebang-mcp-sdk.sh --streamable-http --host 127.0.0.1 --port 8080 --listen
 ```
 
-**Start via script-runner:**
+**Start in the foreground without `--listen`:**
 ```bash
-./bin/script-runner.sh shebang-mcp-sdk --streamable-http --port 8080
+./bin/shebang-mcp-sdk.sh --streamable-http --host 127.0.0.1 --port 8080
 ```
 
 **Verify:**
@@ -107,10 +116,12 @@ Invoke-RestMethod -Uri "http://127.0.0.1:8080/mcp" -Method Post -ContentType "ap
 
 ## Building MCPB Bundles
 
-```bash
+```powershell
 # PowerShell
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\bin\package-mcpb.ps1
+```
 
+```bash
 # POSIX sh
 ./bin/package-mcpb.sh
 ```

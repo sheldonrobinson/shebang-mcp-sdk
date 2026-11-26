@@ -24,17 +24,21 @@ Native implementations for:
 ### Start MCP Server (stdio mode)
 ```bash
 # Linux / macOS (Bash)
-./bin/script-runner.sh shebang-mcp-sdk --stdio
+./bin/shebang-mcp-sdk.sh --stdio
+```
 
+```powershell
 # Windows (PowerShell)
-pwsh -NoProfile -ExecutionPolicy Bypass -File .\bin\script-runner.ps1 --use-pwsh shebang-mcp-sdk --stdio
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\bin\shebang-mcp-sdk.ps1 --stdio
 ```
 
 ### Start Streamable HTTP Service
 ```bash
 # Linux / macOS (Bash)
 ./bin/shebang-mcp-sdk.sh --streamable-http --host 127.0.0.1 --port 8080 --listen
+```
 
+```powershell
 # Windows (PowerShell)
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\bin\shebang-mcp-sdk.ps1 --streamable-http --port 8080
 ```
@@ -43,7 +47,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\bin\shebang-mcp-sdk.ps1 --stream
 
 | Server Key | Platform | Transport | Command / Endpoint |
 |---|---|---|---|
-| `shebang-mcp-sdk` | Cross-Platform | `stdio` | `./bin/script-runner shebang-mcp-sdk --stdio` |
+| `shebang-mcp-sdk` | Linux / macOS (POSIX sh/Bash) | `stdio` | `sh ${PLUGIN_ROOT}/bin/shebang-mcp-sdk.sh --stdio` |
 | `shebang-mcp-sdk-http` | Cross-Platform | `streamable-http` | `http://127.0.0.1:8080/mcp` |
 
 ## Documentation

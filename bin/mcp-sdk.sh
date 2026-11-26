@@ -50,6 +50,14 @@ MCP_CLEANUP_DONE="false"
 MCP_CLEANUP_HOOKS=""
 MCP_TEMP_FILES=""
 
+# HTTP security limits. Origin values are matched exactly (case-insensitively);
+# the allowlist is a comma/whitespace-separated list and defaults to loopback.
+MCP_HTTP_ALLOWED_ORIGINS="${MCP_HTTP_ALLOWED_ORIGINS:-}"
+MCP_HTTP_MAX_BODY_BYTES="${MCP_HTTP_MAX_BODY_BYTES:-${MCP_HTTP_MAX_CONTENT_LENGTH:-1048576}}"
+MCP_HTTP_ALLOW_NON_LOOPBACK="${MCP_HTTP_ALLOW_NON_LOOPBACK:-false}"
+# Shared by forked HTTP workers. Normally created by the listener with mktemp.
+MCP_HTTP_STATE_DIR="${MCP_HTTP_STATE_DIR:-}"
+
 # --- On-Exit & Connection Cleanup Handler -----------------------------------
 # Register a custom cleanup callback function name to run on exit
 mcp_register_cleanup() {
@@ -162,26 +170,66 @@ is_json_number() {
     esac
 }
 
+# Validate raw input bytes before jq can replace malformed UTF-8 with U+FFFD.
+# iconv is available in the supported WSL and Git Bash environments. The POSIX
+# od/awk fallback is deliberately strict rather than silently skipping validation.
+mcp_utf8_valid() {
+    if command -v iconv >/dev/null 2>&1; then
+        iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1
+        return $?
+    fi
+
+    LC_ALL=C od -An -v -tu1 | awk '
+        BEGIN { need = 0; lo = 128; hi = 191; bad = 0 }
+        {
+            for (i = 1; i <= NF; i++) {
+                b = $i + 0
+                if (need > 0) {
+                    if (b < lo || b > hi) { bad = 1; exit }
+                    need--
+                    lo = 128
+                    hi = 191
+                } else if (b <= 127) {
+                    # ASCII, including JSON-insignificant whitespace.
+                } else if (b >= 194 && b <= 223) {
+                    need = 1
+                } else if (b == 224) {
+                    need = 2; lo = 160
+                } else if ((b >= 225 && b <= 236) || b == 238 || b == 239) {
+                    need = 2
+                } else if (b == 237) {
+                    need = 2; hi = 159
+                } else if (b == 240) {
+                    need = 3; lo = 144
+                } else if (b >= 241 && b <= 243) {
+                    need = 3
+                } else if (b == 244) {
+                    need = 3; hi = 143
+                } else {
+                    bad = 1; exit
+                }
+            }
+        }
+        END { if (need > 0) bad = 1; exit bad }
+    '
+}
+
 # JSON-RPC 2.0 response constructor
-# Usage: json_response <id> <result_json> [error_json]
+# Usage: json_response <id_json> <result_json> [error_json]
+# Dispatcher IDs are already JSON-encoded. For compatibility with consumers that
+# call this helper directly, a non-JSON legacy value is encoded as a string.
 json_response() {
     _jr_id="${1:-null}"
     _jr_result="${2:-"{}"}"
     _jr_error="${3:-}"
 
-    if [ -z "${_jr_id}" ] || [ "${_jr_id}" = "null" ]; then
+    if [ -z "${_jr_id}" ]; then
         _jr_id_expr="null"
-    elif is_json_number "${_jr_id}"; then
-        _jr_id_expr="${_jr_id}"
+    elif printf '%s' "${_jr_id}" | jq . >/dev/null 2>&1; then
+        # Never infer the ID type from its decoded text: "1" and 1 differ.
+        _jr_id_expr=$(printf '%s' "${_jr_id}" | jq -c .)
     else
-        case "${_jr_id}" in
-            \"*\")
-                _jr_id_expr="${_jr_id}"
-                ;;
-            *)
-                _jr_id_expr=$(printf '%s' "${_jr_id}" | jq -Rs .)
-                ;;
-        esac
+        _jr_id_expr=$(printf '%s' "${_jr_id}" | jq -Rs .)
     fi
 
     if [ -n "${_jr_error}" ]; then
@@ -199,7 +247,7 @@ json_response() {
     else
         _jr_result_json="{}"
         if [ -n "${_jr_result}" ]; then
-            if printf '%s' "${_jr_result}" | jq -e . >/dev/null 2>&1; then
+            if printf '%s' "${_jr_result}" | jq . >/dev/null 2>&1; then
                 _jr_result_json="${_jr_result}"
             else
                 _jr_result_json=$(printf '%s' "${_jr_result}" | jq -Rs '{content:[{type:"text",text:.}]}')
@@ -249,10 +297,17 @@ mcp_parse_message() {
         return 0
     fi
 
-    _mpm_jsonrpc=$(printf '%s' "${_mpm_message}" | jq -r '.jsonrpc // ""' 2>/dev/null || echo "")
+    _mpm_jsonrpc=$(printf '%s' "${_mpm_message}" | jq -r 'if .jsonrpc == "2.0" then "2.0" else "" end' 2>/dev/null || echo "")
     _mpm_has_id=$(printf '%s' "${_mpm_message}" | jq -r 'has("id")' 2>/dev/null || echo "false")
-    _mpm_id=$(printf '%s' "${_mpm_message}" | jq -r 'if .id == null then "null" else (.id | tostring) end' 2>/dev/null || echo "null")
-    _mpm_method=$(printf '%s' "${_mpm_message}" | jq -r 'if (.method | type) == "string" then .method else "" end' 2>/dev/null || echo "")
+    # Keep ID and METHOD_JSON compact JSON so escaped newlines never become
+    # physical lines. METHOD retains its historical unquoted form for ordinary
+    # names, but special characters stay JSON-escaped to keep this public
+    # line-oriented API unambiguous. Consumers needing decoded text should use
+    # METHOD_JSON; the dispatcher decodes that field directly from the message.
+    _mpm_id=$(printf '%s' "${_mpm_message}" | jq -c 'if has("id") then .id else null end' 2>/dev/null || echo "null")
+    _mpm_method_json=$(printf '%s' "${_mpm_message}" | jq -c 'if (.method | type) == "string" then .method else "" end' 2>/dev/null || echo '""')
+    _mpm_method="${_mpm_method_json#?}"
+    _mpm_method="${_mpm_method%?}"
     _mpm_params=$(printf '%s' "${_mpm_message}" | jq -c '.params // {}' 2>/dev/null || echo "{}")
 
     if [ "${_mpm_has_id}" = "false" ]; then
@@ -261,8 +316,9 @@ mcp_parse_message() {
         _mpm_is_notification="false"
     fi
 
-    printf 'VALID=true\nJSONRPC=%s\nIS_NOTIFICATION=%s\nID=%s\nMETHOD=%s\nPARAMS=%s\n' \
-        "${_mpm_jsonrpc}" "${_mpm_is_notification}" "${_mpm_id}" "${_mpm_method}" "${_mpm_params}"
+    printf 'VALID=true\nJSONRPC=%s\nIS_NOTIFICATION=%s\nID=%s\nMETHOD_JSON=%s\nMETHOD=%s\nPARAMS=%s\n' \
+        "${_mpm_jsonrpc}" "${_mpm_is_notification}" "${_mpm_id}" \
+        "${_mpm_method_json}" "${_mpm_method}" "${_mpm_params}"
 }
 
 # ============================================================================
@@ -288,7 +344,18 @@ handle_initialize() {
 
     MCP_INITIALIZED="true"
 
+    # Tools are supported by the generic empty-list/call routes. Resource and
+    # prompt capabilities are advertised only when a consumer supplies at least
+    # one handler for that concept; unsupported routes return method-not-found.
     _hi_caps=$(jq -cn '{tools:{}}')
+    if command -v handle_list_resources >/dev/null 2>&1 || \
+       command -v handle_read_resource >/dev/null 2>&1; then
+        _hi_caps=$(printf '%s' "${_hi_caps}" | jq -c '. + {resources:{}}')
+    fi
+    if command -v handle_list_prompts >/dev/null 2>&1 || \
+       command -v handle_get_prompt >/dev/null 2>&1; then
+        _hi_caps=$(printf '%s' "${_hi_caps}" | jq -c '. + {prompts:{}}')
+    fi
     _hi_info=$(jq -cn --arg name "${MCP_SERVER_NAME}" --arg version "${MCP_SERVER_VERSION}" \
         '{name:$name, version:$version}')
     _hi_res=$(jq -cn \
@@ -340,6 +407,47 @@ handle_tools_call() {
     json_response "${_htc_id}" "" "${_htc_err}"
 }
 
+mcp_method_not_found() {
+    _mmnf_id="${1:-null}"
+    _mmnf_method="${2:-}"
+    _mmnf_err=$(mcp_error -32601 "Method not found: ${_mmnf_method}")
+    json_response "${_mmnf_id}" "" "${_mmnf_err}"
+}
+
+# Resource and prompt routes use the documented consumer extension names. No
+# synthetic empty result is returned when the corresponding handler is absent.
+handle_resources_list() {
+    if command -v handle_list_resources >/dev/null 2>&1; then
+        handle_list_resources "${1}" "${2:-"{}"}"
+    else
+        mcp_method_not_found "${1}" "resources/list"
+    fi
+}
+
+handle_resources_read() {
+    if command -v handle_read_resource >/dev/null 2>&1; then
+        handle_read_resource "${1}" "${2:-"{}"}"
+    else
+        mcp_method_not_found "${1}" "resources/read"
+    fi
+}
+
+handle_prompts_list() {
+    if command -v handle_list_prompts >/dev/null 2>&1; then
+        handle_list_prompts "${1}" "${2:-"{}"}"
+    else
+        mcp_method_not_found "${1}" "prompts/list"
+    fi
+}
+
+handle_prompts_get() {
+    if command -v handle_get_prompt >/dev/null 2>&1; then
+        handle_get_prompt "${1}" "${2:-"{}"}"
+    else
+        mcp_method_not_found "${1}" "prompts/get"
+    fi
+}
+
 # Generic JSON-RPC 2.0 message dispatcher
 mcp_dispatch_message() {
     _mdm_line="${1:-}"
@@ -347,7 +455,8 @@ mcp_dispatch_message() {
         return 0
     fi
 
-    if ! printf '%s' "${_mdm_line}" | jq -e . >/dev/null 2>&1; then
+    if ! printf '%s' "${_mdm_line}" | mcp_utf8_valid || \
+       ! printf '%s' "${_mdm_line}" | jq . >/dev/null 2>&1; then
         _mdm_err=$(mcp_error -32700 "Parse error")
         json_response "null" "" "${_mdm_err}"
         return 0
@@ -388,18 +497,99 @@ mcp_dispatch_message() {
     mcp_dispatch_single "${_mdm_line}"
 }
 
+mcp_route_request() {
+    _mrr_id="${1:-null}"
+    _mrr_method="${2:-}"
+    _mrr_params="${3:-"{}"}"
+    _mrr_is_notif="${4:-false}"
+
+    case "${_mrr_method}" in
+        initialize)
+            handle_initialize "${_mrr_id}" "${_mrr_params}"
+            ;;
+        notifications/initialized|initialized)
+            if [ "${_mrr_is_notif}" != "true" ]; then
+                _mrr_err=$(mcp_error -32600 "Invalid Request: notification method must not include an id")
+                json_response "${_mrr_id}" "" "${_mrr_err}"
+                return 0
+            fi
+            handle_initialized
+            ;;
+        notifications/*)
+            if [ "${_mrr_is_notif}" != "true" ]; then
+                _mrr_err=$(mcp_error -32600 "Invalid Request: notification method must not include an id")
+                json_response "${_mrr_id}" "" "${_mrr_err}"
+            fi
+            return 0
+            ;;
+        ping)
+            handle_ping "${_mrr_id}"
+            ;;
+        tools/list)
+            handle_tools_list "${_mrr_id}" "${_mrr_params}"
+            ;;
+        tools/call)
+            handle_tools_call "${_mrr_id}" "${_mrr_params}"
+            ;;
+        resources/list)
+            handle_resources_list "${_mrr_id}" "${_mrr_params}"
+            ;;
+        resources/read)
+            handle_resources_read "${_mrr_id}" "${_mrr_params}"
+            ;;
+        prompts/list)
+            handle_prompts_list "${_mrr_id}" "${_mrr_params}"
+            ;;
+        prompts/get)
+            handle_prompts_get "${_mrr_id}" "${_mrr_params}"
+            ;;
+        *)
+            if command -v mcp_custom_method_handler >/dev/null 2>&1; then
+                # A subshell contains an explicit consumer exit. Its stdout stays
+                # attached to the dispatcher, so no callback output is captured,
+                # truncated, or replayed. The dispatcher converts the status.
+                if (mcp_custom_method_handler "${_mrr_id}" "${_mrr_method}" "${_mrr_params}" "${_mrr_is_notif}"); then
+                    return 0
+                else
+                    _mrr_status=$?
+                    return "${_mrr_status}"
+                fi
+            fi
+            if [ "${_mrr_is_notif}" != "true" ] && [ "${_mrr_id}" != "null" ] && [ -n "${_mrr_id}" ]; then
+                mcp_method_not_found "${_mrr_id}" "${_mrr_method}"
+            fi
+            ;;
+    esac
+}
+
 mcp_dispatch_single() {
     _mds_message="${1}"
-    _mds_parse=$(mcp_parse_message "${_mds_message}")
 
-    _mds_valid=$(printf '%s\n' "${_mds_parse}" | grep '^VALID=' | cut -d= -f2-)
-    _mds_jsonrpc=$(printf '%s\n' "${_mds_parse}" | grep '^JSONRPC=' | cut -d= -f2-)
-    _mds_is_notif=$(printf '%s\n' "${_mds_parse}" | grep '^IS_NOTIFICATION=' | cut -d= -f2-)
-    _mds_id=$(printf '%s\n' "${_mds_parse}" | grep '^ID=' | cut -d= -f2-)
-    _mds_method=$(printf '%s\n' "${_mds_parse}" | grep '^METHOD=' | cut -d= -f2-)
-    _mds_params=$(printf '%s\n' "${_mds_parse}" | grep '^PARAMS=' | cut -d= -f2-)
+    # Extract fields directly from JSON instead of reparsing decoded values from
+    # a line-oriented key/value stream. Compact JSON preserves ID type/escapes.
+    if ! printf '%s' "${_mds_message}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+        _mds_err=$(mcp_error -32600 "Invalid Request")
+        json_response "null" "" "${_mds_err}"
+        return 0
+    fi
+    _mds_jsonrpc=$(printf '%s' "${_mds_message}" | jq -r 'if .jsonrpc == "2.0" then "2.0" else "" end' 2>/dev/null || echo "")
+    _mds_is_notif=$(printf '%s' "${_mds_message}" | jq -r 'if has("id") then "false" else "true" end' 2>/dev/null || echo "false")
+    _mds_id=$(printf '%s' "${_mds_message}" | jq -c 'if has("id") then .id else null end' 2>/dev/null || echo "null")
+    _mds_method_json=$(printf '%s' "${_mds_message}" | jq -c 'if (.method | type) == "string" then .method else "" end' 2>/dev/null || echo '""')
+    _mds_method=$(printf '%s' "${_mds_method_json}" | jq -r . 2>/dev/null || echo "")
+    _mds_params=$(printf '%s' "${_mds_message}" | jq -c '.params // {}' 2>/dev/null || echo "{}")
 
-    if [ "${_mds_valid}" != "true" ] || [ "${_mds_jsonrpc}" != "2.0" ]; then
+    # An ID-less object never receives a response, even when its envelope is
+    # invalid. Only route notifications after validating their version/method.
+    if [ "${_mds_is_notif}" = "true" ]; then
+        if [ "${_mds_jsonrpc}" != "2.0" ] || [ -z "${_mds_method}" ]; then
+            return 0
+        fi
+        mcp_route_request "${_mds_id}" "${_mds_method}" "${_mds_params}" "true" >/dev/null || true
+        return 0
+    fi
+
+    if [ "${_mds_jsonrpc}" != "2.0" ]; then
         _mds_err=$(mcp_error -32600 "Invalid Request")
         json_response "${_mds_id}" "" "${_mds_err}"
         return 0
@@ -414,36 +604,25 @@ mcp_dispatch_single() {
         return 0
     fi
 
-    case "${_mds_method}" in
-        initialize)
-            handle_initialize "${_mds_id}" "${_mds_params}"
-            ;;
-        notifications/initialized|initialized)
-            handle_initialized
-            ;;
-        notifications/*)
-            return 0
-            ;;
-        ping)
-            handle_ping "${_mds_id}"
-            ;;
-        tools/list)
-            handle_tools_list "${_mds_id}" "${_mds_params}"
-            ;;
-        tools/call)
-            handle_tools_call "${_mds_id}" "${_mds_params}"
-            ;;
-        *)
-            if command -v mcp_custom_method_handler >/dev/null 2>&1; then
-                mcp_custom_method_handler "${_mds_id}" "${_mds_method}" "${_mds_params}" "${_mds_is_notif}"
-                return 0
-            fi
-            if [ "${_mds_is_notif}" != "true" ] && [ "${_mds_id}" != "null" ] && [ -n "${_mds_id}" ]; then
-                _mds_err=$(mcp_error -32601 "Method not found: ${_mds_method}")
-                json_response "${_mds_id}" "" "${_mds_err}"
-            fi
-            ;;
-    esac
+    # Keep routing in the current shell to preserve handler state, but stage its
+    # stdout. A failed consumer may have written a partial response before its
+    # nonzero return; discard that output and emit exactly one internal error.
+    if ! _mds_route_file=$(mktemp "${TMPDIR:-/tmp}/mcp-dispatch.XXXXXX"); then
+        _mds_err=$(mcp_error -32603 "Internal error")
+        json_response "${_mds_id}" "" "${_mds_err}"
+        return 0
+    fi
+    _mds_route_status=0
+    mcp_route_request "${_mds_id}" "${_mds_method}" "${_mds_params}" "false" > "${_mds_route_file}" || _mds_route_status=$?
+    if [ "${_mds_route_status}" -ne 0 ]; then
+        rm -f "${_mds_route_file}" || true
+        _mds_err=$(mcp_error -32603 "Internal error")
+        json_response "${_mds_id}" "" "${_mds_err}"
+    else
+        cat "${_mds_route_file}"
+        rm -f "${_mds_route_file}" || true
+    fi
+    return 0
 }
 
 route_mcp_message() {
@@ -505,6 +684,128 @@ extract_jsonrpc_from_post() {
     fi
 }
 
+# Print a canonical unsigned decimal integer, rejecting signs, whitespace,
+# fractions, exponents, and empty values before any numeric shell test is used.
+mcp_http_normalize_uint() {
+    _mhnu_value="${1:-}"
+    case "${_mhnu_value}" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    while [ "${#_mhnu_value}" -gt 1 ] && [ "${_mhnu_value#0}" != "${_mhnu_value}" ]; do
+        _mhnu_value="${_mhnu_value#0}"
+    done
+    printf '%s\n' "${_mhnu_value}"
+}
+
+mcp_http_body_limit() {
+    _mhbl_limit=$(mcp_http_normalize_uint "${MCP_HTTP_MAX_BODY_BYTES}") || return 1
+    # Keep subsequent awk comparisons exactly representable and dd counts
+    # practical on all supported POSIX platforms.
+    if [ "${#_mhbl_limit}" -gt 10 ]; then
+        return 1
+    fi
+    if [ "${#_mhbl_limit}" -eq 10 ] && \
+       awk -v n="${_mhbl_limit}" 'BEGIN { exit !(n > 2147483647) }'; then
+        return 1
+    fi
+    printf '%s\n' "${_mhbl_limit}"
+}
+
+mcp_http_validate_bind_host() {
+    _mhvb_host=$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')
+    case "${_mhvb_host}" in
+        localhost|127.0.0.1|::1|\[::1\]) return 0 ;;
+    esac
+    if [ "${MCP_HTTP_ALLOW_NON_LOOPBACK}" = "true" ]; then
+        return 0
+    fi
+    echo "ERROR: Refusing non-loopback HTTP bind '${1:-}'. Set MCP_HTTP_ALLOW_NON_LOOPBACK=true explicitly to override." >&2
+    return 1
+}
+
+mcp_http_origin_allowed() {
+    _mhoa_origin="${1:-}"
+    # Non-browser clients commonly omit Origin. An explicitly empty Origin is
+    # rejected by the request parser rather than treated as absent.
+    if [ -z "${_mhoa_origin}" ]; then
+        return 0
+    fi
+    _mhoa_origin=$(printf '%s' "${_mhoa_origin}" | tr '[:upper:]' '[:lower:]')
+    _mhoa_list="${MCP_HTTP_ALLOWED_ORIGINS}"
+    if [ -z "${_mhoa_list}" ]; then
+        _mhoa_list="http://localhost https://localhost http://127.0.0.1 https://127.0.0.1 http://[::1] https://[::1] http://localhost:${MCP_HTTP_PORT} https://localhost:${MCP_HTTP_PORT} http://127.0.0.1:${MCP_HTTP_PORT} https://127.0.0.1:${MCP_HTTP_PORT} http://[::1]:${MCP_HTTP_PORT} https://[::1]:${MCP_HTTP_PORT}"
+    fi
+    # Origin contains no whitespace, so comma/whitespace tokenization cannot
+    # introduce pattern matching; grep -F -x performs an exact comparison.
+    printf '%s\n' "${_mhoa_list}" | tr ',' '\n' | \
+        awk '{ for (i = 1; i <= NF; i++) print tolower($i) }' | \
+        grep -F -x -e "${_mhoa_origin}" >/dev/null 2>&1
+}
+
+mcp_http_init_state() {
+    if [ -n "${MCP_HTTP_STATE_DIR}" ]; then
+        if [ ! -d "${MCP_HTTP_STATE_DIR}" ] || [ ! -w "${MCP_HTTP_STATE_DIR}" ]; then
+            echo "ERROR: MCP HTTP state directory is not writable: ${MCP_HTTP_STATE_DIR}" >&2
+            return 1
+        fi
+    else
+        _mhis_dir=$(mktemp -d "${TMPDIR:-/tmp}/mcp-sdk-http.XXXXXX") || {
+            echo "ERROR: Unable to create MCP HTTP state directory" >&2
+            return 1
+        }
+        chmod 700 "${_mhis_dir}" 2>/dev/null || {
+            rm -rf "${_mhis_dir}" 2>/dev/null || true
+            echo "ERROR: Unable to secure MCP HTTP state directory" >&2
+            return 1
+        }
+        MCP_HTTP_STATE_DIR="${_mhis_dir}"
+        # Only the process that creates the directory owns its cleanup. Workers
+        # inherit MCP_HTTP_STATE_DIR but start with an empty MCP_TEMP_FILES list.
+        mcp_register_temp_file "${MCP_HTTP_STATE_DIR}"
+    fi
+    export MCP_HTTP_STATE_DIR
+}
+
+mcp_http_current_session() {
+    [ -n "${MCP_HTTP_STATE_DIR}" ] || return 1
+    for _mhcur_file in "${MCP_HTTP_STATE_DIR}"/session-*; do
+        [ -f "${_mhcur_file}" ] || continue
+        _mhcur_name="${_mhcur_file##*/}"
+        _mhcur_sid="${_mhcur_name#session-}"
+        case "${_mhcur_sid}" in
+            ''|*[!A-Za-z0-9._-]*) continue ;;
+        esac
+        printf '%s\n' "${_mhcur_sid}"
+        return 0
+    done
+    return 1
+}
+
+mcp_http_create_session() {
+    mcp_http_init_state || return 1
+    _mhcs_sid=$(mcp_generate_session_id) || return 1
+    case "${_mhcs_sid}" in
+        ''|*[!A-Za-z0-9._-]*) return 1 ;;
+    esac
+    if ! (umask 077; : > "${MCP_HTTP_STATE_DIR}/session-${_mhcs_sid}"); then
+        return 1
+    fi
+    MCP_SESSION_ID="${_mhcs_sid}"
+}
+
+mcp_http_delete_session() {
+    _mhds_req="${1:-}"
+    _mhds_active=$(mcp_http_current_session 2>/dev/null || true)
+    if [ -z "${_mhds_active}" ] || [ "${_mhds_req}" != "${_mhds_active}" ]; then
+        return 1
+    fi
+    # The filename comes from the validated server-generated active ID, never
+    # directly from an HTTP header. Deleting an old session cannot unlink a new
+    # session with a different ID.
+    rm -f "${MCP_HTTP_STATE_DIR}/session-${_mhds_active}" || return 1
+    MCP_SESSION_ID=""
+}
+
 send_http_response() {
     _shr_body="${1:-}"
     _shr_status="${2:-200}"
@@ -516,9 +817,11 @@ send_http_response() {
         202) _shr_text="Accepted" ;;
         204) _shr_text="No Content" ;;
         400) _shr_text="Bad Request" ;;
+        403) _shr_text="Forbidden" ;;
         404) _shr_text="Not Found" ;;
         405) _shr_text="Method Not Allowed" ;;
         406) _shr_text="Not Acceptable" ;;
+        413) _shr_text="Payload Too Large" ;;
         500) _shr_text="Internal Server Error" ;;
         *)   _shr_text="OK" ;;
     esac
@@ -541,6 +844,38 @@ send_http_response() {
     fi
 }
 
+# Send a JSON-RPC lifecycle error for requests, but no body for a payload
+# consisting solely of valid notifications. For a mixed batch, retain the first
+# request ID in the existing single-error HTTP response format.
+mcp_http_lifecycle_error() {
+    _mhle_msg="${1:-}"
+    _mhle_status="${2:-500}"
+    _mhle_code="${3:--32603}"
+    _mhle_message="${4:-Internal error}"
+
+    if printf '%s' "${_mhle_msg}" | jq -e '
+        def is_notification:
+            type == "object" and .jsonrpc == "2.0" and
+            (.method | type) == "string" and (has("id") | not);
+        if type == "object" then is_notification
+        elif type == "array" then length > 0 and all(.[]; is_notification)
+        else false end' >/dev/null 2>&1; then
+        send_http_response "" "${_mhle_status}" "text/plain" ""
+        return 0
+    fi
+
+    _mhle_id=$(printf '%s' "${_mhle_msg}" | jq -c '
+        if type == "object" then
+            if has("id") then .id else null end
+        elif type == "array" then
+            ([.[] | select(type == "object" and has("id")) | .id] |
+                if length > 0 then .[0] else null end)
+        else null end' 2>/dev/null || printf 'null')
+    _mhle_err=$(mcp_error "${_mhle_code}" "${_mhle_message}")
+    _mhle_body=$(json_response "${_mhle_id}" "" "${_mhle_err}")
+    send_http_response "${_mhle_body}" "${_mhle_status}" "application/json" ""
+}
+
 send_http_sse_response() {
     _shs_json="${1:-}"
     _shs_status="${2:-200}"
@@ -554,7 +889,20 @@ handle_http_post() {
     _hhp_accept="${2:-application/json, text/event-stream}"
     _hhp_req_sid="${3:-}"
 
-    if ! printf '%s' "${_hhp_body}" | jq -e . >/dev/null 2>&1; then
+    _hhp_limit=$(mcp_http_body_limit 2>/dev/null || true)
+    if [ -z "${_hhp_limit}" ]; then
+        mcp_http_lifecycle_error "${_hhp_body}" 500 -32603 "Invalid MCP_HTTP_MAX_BODY_BYTES configuration"
+        return 0
+    fi
+    _hhp_size=$(printf '%s' "${_hhp_body}" | wc -c | tr -d '[:space:]')
+    if [ "${#_hhp_size}" -gt 10 ] || \
+       awk -v have="${_hhp_size}" -v max="${_hhp_limit}" 'BEGIN { exit !(have > max) }'; then
+        send_http_response "" 413 "text/plain" ""
+        return 0
+    fi
+
+    if ! printf '%s' "${_hhp_body}" | mcp_utf8_valid || \
+       ! printf '%s' "${_hhp_body}" | jq . >/dev/null 2>&1; then
         _hhp_err=$(json_response "null" "" "$(mcp_error -32700 "Parse error")")
         send_http_response "${_hhp_err}" 400 "application/json"
         return 0
@@ -567,13 +915,37 @@ handle_http_post() {
         return 0
     fi
 
-    _hhp_method=$(printf '%s' "${_hhp_msg}" | jq -r 'if type=="object" then (.method // "") else "" end' 2>/dev/null || echo "")
-    if [ "${_hhp_method}" = "initialize" ] && [ -z "${MCP_SESSION_ID}" ]; then
-        MCP_SESSION_ID=$(mcp_generate_session_id)
-    elif [ -n "${MCP_SESSION_ID}" ] && [ -n "${_hhp_req_sid}" ] && [ "${_hhp_req_sid}" != "${MCP_SESSION_ID}" ]; then
-        _hhp_err=$(json_response "null" "" "$(mcp_error -32600 "Invalid or expired Mcp-Session-Id")")
-        send_http_response "${_hhp_err}" 404 "application/json"
+    # Session markers live in the shared state directory, not just in this
+    # worker's variables. Once initialized, every request must present the
+    # active session ID; an unknown supplied ID is never implicitly adopted.
+    _hhp_active_sid=$(mcp_http_current_session 2>/dev/null || true)
+    if [ -n "${_hhp_active_sid}" ]; then
+        if [ -z "${_hhp_req_sid}" ]; then
+            mcp_http_lifecycle_error "${_hhp_msg}" 400 -32600 "Missing Mcp-Session-Id"
+            return 0
+        fi
+        if [ "${_hhp_req_sid}" != "${_hhp_active_sid}" ]; then
+            mcp_http_lifecycle_error "${_hhp_msg}" 404 -32600 "Invalid or expired Mcp-Session-Id"
+            return 0
+        fi
+        MCP_SESSION_ID="${_hhp_active_sid}"
+    elif [ -n "${_hhp_req_sid}" ]; then
+        mcp_http_lifecycle_error "${_hhp_msg}" 404 -32600 "Invalid or expired Mcp-Session-Id"
         return 0
+    else
+        MCP_SESSION_ID=""
+        _hhp_has_initialize=$(printf '%s' "${_hhp_msg}" | jq -r '
+            if type == "object" then
+                (.jsonrpc == "2.0" and .method == "initialize" and has("id"))
+            elif type == "array" then
+                any(.[]; type == "object" and .jsonrpc == "2.0" and .method == "initialize" and has("id"))
+            else false end' 2>/dev/null || echo "false")
+        if [ "${_hhp_has_initialize}" = "true" ]; then
+            if ! mcp_http_create_session; then
+                mcp_http_lifecycle_error "${_hhp_msg}" 500 -32603 "Unable to create MCP session"
+                return 0
+            fi
+        fi
     fi
 
     _hhp_resp=$(mcp_dispatch_message "${_hhp_msg}")
@@ -593,6 +965,18 @@ handle_http_post() {
 
 handle_http_get() {
     _hhg_accept="${1:-}"
+    _hhg_req_sid="${2:-}"
+    _hhg_active_sid=$(mcp_http_current_session 2>/dev/null || true)
+    if [ -n "${_hhg_active_sid}" ] && [ -z "${_hhg_req_sid}" ]; then
+        send_http_response "" 400 "text/plain" ""
+        return 0
+    fi
+    if { [ -n "${_hhg_active_sid}" ] && [ "${_hhg_req_sid}" != "${_hhg_active_sid}" ]; } || \
+       { [ -z "${_hhg_active_sid}" ] && [ -n "${_hhg_req_sid}" ]; }; then
+        send_http_response "" 404 "text/plain" ""
+        return 0
+    fi
+    MCP_SESSION_ID="${_hhg_active_sid}"
     if [ "${_hhg_accept#*text/event-stream}" != "${_hhg_accept}" ]; then
         _hhg_body="$(printf ': streamable-http sse stream open\n\n')"
         send_http_response "${_hhg_body}" 200 "text/event-stream" "${MCP_SESSION_ID}"
@@ -603,13 +987,21 @@ handle_http_get() {
 
 handle_http_delete() {
     _hhd_req_sid="${1:-}"
-    if [ -n "${MCP_SESSION_ID}" ] && [ -n "${_hhd_req_sid}" ] && [ "${_hhd_req_sid}" != "${MCP_SESSION_ID}" ]; then
-        send_http_response "" 404 "text/plain"
+    _hhd_active_sid=$(mcp_http_current_session 2>/dev/null || true)
+    if [ -n "${_hhd_active_sid}" ] && [ -z "${_hhd_req_sid}" ]; then
+        send_http_response "" 400 "text/plain" ""
         return 0
     fi
-    MCP_SESSION_ID=""
+    if [ -z "${_hhd_active_sid}" ] || [ "${_hhd_req_sid}" != "${_hhd_active_sid}" ]; then
+        send_http_response "" 404 "text/plain" ""
+        return 0
+    fi
+    if ! mcp_http_delete_session "${_hhd_req_sid}"; then
+        send_http_response "" 500 "text/plain" ""
+        return 0
+    fi
     MCP_INITIALIZED="false"
-    send_http_response "" 200 "text/plain"
+    send_http_response "" 200 "text/plain" ""
 }
 
 handle_http_request_stream() {
@@ -627,9 +1019,14 @@ handle_http_request_stream() {
     _hhrs_rest="${_hhrs_req_line#* }"
     _hhrs_path="${_hhrs_rest%% *}"
 
-    _hhrs_clen=0
+    _hhrs_clen=""
+    _hhrs_clen_seen="false"
+    _hhrs_clen_invalid="false"
     _hhrs_accept="application/json, text/event-stream"
     _hhrs_session=""
+    _hhrs_origin=""
+    _hhrs_origin_seen="false"
+    _hhrs_origin_invalid="false"
     while IFS= read -r _hhrs_hline; do
         _hhrs_hline="${_hhrs_hline%"${MCP_CR}"}"
         if [ -z "${_hhrs_hline}" ]; then
@@ -637,17 +1034,71 @@ handle_http_request_stream() {
         fi
         _hhrs_hname=$(printf '%s' "${_hhrs_hline%%:*}" | tr '[:upper:]' '[:lower:]')
         _hhrs_hval="${_hhrs_hline#*:}"
-        _hhrs_hval="${_hhrs_hval#" "}"
+        _hhrs_hval=$(printf '%s\n' "${_hhrs_hval}" | awk '{ sub(/^[ \t]+/, ""); sub(/[ \t]+$/, ""); print }')
         case "${_hhrs_hname}" in
-            content-length) _hhrs_clen="${_hhrs_hval}" ;;
+            content-length)
+                if [ "${_hhrs_clen_seen}" = "true" ]; then
+                    _hhrs_clen_invalid="true"
+                else
+                    _hhrs_clen="${_hhrs_hval}"
+                    _hhrs_clen_seen="true"
+                fi
+                ;;
             accept)         _hhrs_accept="${_hhrs_hval}" ;;
             mcp-session-id) _hhrs_session="${_hhrs_hval}" ;;
+            origin)
+                if [ "${_hhrs_origin_seen}" = "true" ]; then
+                    _hhrs_origin_invalid="true"
+                else
+                    _hhrs_origin="${_hhrs_hval}"
+                    _hhrs_origin_seen="true"
+                fi
+                ;;
         esac
     done
 
+    if [ "${_hhrs_origin_invalid}" = "true" ] || \
+       { [ "${_hhrs_origin_seen}" = "true" ] && [ -z "${_hhrs_origin}" ]; } || \
+       { [ "${_hhrs_origin_seen}" = "true" ] && ! mcp_http_origin_allowed "${_hhrs_origin}"; }; then
+        send_http_response "" 403 "text/plain" ""
+        return 0
+    fi
+    if [ "${_hhrs_clen_invalid}" = "true" ]; then
+        send_http_response "" 400 "text/plain" ""
+        return 0
+    fi
+
+    _hhrs_limit=$(mcp_http_body_limit 2>/dev/null || true)
+    if [ -z "${_hhrs_limit}" ]; then
+        send_http_response "" 500 "text/plain" ""
+        return 0
+    fi
+    if [ "${_hhrs_clen_seen}" = "true" ]; then
+        _hhrs_clen=$(mcp_http_normalize_uint "${_hhrs_clen}" 2>/dev/null || true)
+        if [ -z "${_hhrs_clen}" ]; then
+            send_http_response "" 400 "text/plain" ""
+            return 0
+        fi
+        if [ "${#_hhrs_clen}" -gt 10 ] || \
+           awk -v have="${_hhrs_clen}" -v max="${_hhrs_limit}" 'BEGIN { exit !(have > max) }'; then
+            send_http_response "" 413 "text/plain" ""
+            return 0
+        fi
+    else
+        _hhrs_clen=0
+    fi
+
     _hhrs_body=""
     if [ "${_hhrs_clen}" -gt 0 ]; then
-        _hhrs_body=$(dd bs=1 count="${_hhrs_clen}" 2>/dev/null || true)
+        # Command substitution strips trailing newlines. Append one sentinel so
+        # the byte count reflects exactly what dd read, including trailing LFs.
+        _hhrs_body=$(dd bs=1 count="${_hhrs_clen}" 2>/dev/null; printf 'x')
+        _hhrs_read_size=$(printf '%s' "${_hhrs_body}" | wc -c | tr -d '[:space:]')
+        if [ "${_hhrs_read_size}" -ne "$((_hhrs_clen + 1))" ]; then
+            send_http_response "" 400 "text/plain" ""
+            return 0
+        fi
+        _hhrs_body="${_hhrs_body%?}"
     fi
 
     case "${_hhrs_method}" in
@@ -655,7 +1106,7 @@ handle_http_request_stream() {
             handle_http_post "${_hhrs_body}" "${_hhrs_accept}" "${_hhrs_session}"
             ;;
         GET)
-            handle_http_get "${_hhrs_accept}"
+            handle_http_get "${_hhrs_accept}" "${_hhrs_session}"
             ;;
         DELETE)
             handle_http_delete "${_hhrs_session}"
@@ -669,6 +1120,19 @@ handle_http_request_stream() {
 mcp_streamable_http_server() {
     _mshs_port="${1:-${MCP_HTTP_PORT:-8080}}"
     _mshs_host="${2:-${MCP_HTTP_HOST:-127.0.0.1}}"
+
+    if ! mcp_http_validate_bind_host "${_mshs_host}"; then
+        return 1
+    fi
+    if ! mcp_http_init_state; then
+        return 1
+    fi
+    MCP_HTTP_PORT="${_mshs_port}"
+    MCP_HTTP_HOST="${_mshs_host}"
+    # socat workers are fresh processes; export both configuration and the
+    # private state directory so every request sees the same policy/session.
+    export MCP_HTTP_STATE_DIR MCP_HTTP_PORT MCP_HTTP_HOST \
+        MCP_HTTP_ALLOWED_ORIGINS MCP_HTTP_MAX_BODY_BYTES MCP_HTTP_ALLOW_NON_LOOPBACK
 
     if [ ! -t 0 ] && [ "${MCP_HTTP_LISTEN:-false}" != "true" ]; then
         _mshs_first=""

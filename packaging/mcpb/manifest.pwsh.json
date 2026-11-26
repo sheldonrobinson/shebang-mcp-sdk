@@ -40,9 +40,7 @@
         "-ExecutionPolicy",
         "Bypass",
         "-File",
-        "${__dirname}/bin/script-runner.ps1",
-        "--use-pwsh",
-        "shebang-mcp-sdk",
+        "${__dirname}/bin/shebang-mcp-sdk.ps1",
         "--stdio"
       ],
       "env": {

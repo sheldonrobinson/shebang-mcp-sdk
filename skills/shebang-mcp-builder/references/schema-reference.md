@@ -8,7 +8,6 @@ Schema files use the `.json` extension and follow this structure:
 
 ```json
 {
-  "$schema": "https://sheldonrobinson.github.io/shebang-mcp-sdk/schemas/tool-schema.json",
   "version": "1.0.0",
   "server": {
     "name": "my-mcp-server",
@@ -38,8 +37,7 @@ Schema files use the `.json` extension and follow this structure:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `$schema` | string | No | JSON Schema URI for validation |
-| `version` | string | No | Schema version |
+| `version` | string | No | Informational schema version |
 | `server` | object | No | Server-level metadata |
 | `tools` | array | Yes | List of tool definitions (minimum 1) |
 
@@ -47,32 +45,32 @@ Schema files use the `.json` extension and follow this structure:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `name` | string | Yes | Server name (reported during initialize) |
+| `name` | string | No | Informational metadata; not applied to initialize |
 | `version` | string | No | Server version |
 | `description` | string | No | Human-readable description |
 | `transport` | string | No | Transport: "stdio" or "streamable-http" |
 | `protocolVersion` | string | No | MCP protocol version |
 
+All `server` fields are optional informational metadata. `sdk-generate-handler` does not apply them to `initialize` or transport selection. Configure runtime behavior with `MCP_SERVER_NAME`, `MCP_SERVER_VERSION`, `MCP_PROTOCOL_VERSION`, and `MCP_TRANSPORT`; PowerShell consumers can also use `Set-McpServerInfo` for server metadata.
+
 ### tools[].parameters[] Object
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `name` | string | Yes | Parameter name (valid Bash/PowerShell identifier) |
+| `name` | string | Yes | Non-empty JSON property name, unique within the tool; Bash/PowerShell identifier syntax is not validated |
 | `type` | string | No | Parameter type (default: "string") |
 | `description` | string | No | Parameter description |
 | `required` | boolean | No | Whether the parameter is required |
 
 ### Supported Parameter Types
 
-| Schema Type | Bash | PowerShell | MCP JSON Schema |
-|-------------|------|------------|-----------------|
-| `string` | string | string | string |
-| `number` | string | int/double | number |
-| `integer` | string | int | number |
-| `float` | string | double | number |
-| `boolean` | string | bool | boolean |
-| `array` | string | array | array |
-| `object` | string | hashtable | object |
+| Schema Type | Generated Bash | Generated PowerShell | MCP JSON Schema |
+|---|---|---|---|
+| `string` | JSON string read with `jq` | string | string |
+| `number` / `integer` / `float` | JSON number read with `jq` | parser-native numeric value | number |
+| `boolean` | JSON `true`/`false` read with `jq` | bool | boolean |
+| `array` | compact JSON array read with `jq` | array | array |
+| `object` | compact JSON object read with `jq` | nested `PSCustomObject` or `IDictionary` | object |
 
 ## Usage Examples
 
@@ -91,7 +89,7 @@ sdk-generate-handler "$SCHEMA" bash
 
 ```powershell
 # Import sdk-utils.psm1
-Import-Module "${PLUGIN_ROOT}/bin/sdk-utils.psm1"
+Import-Module (Join-Path $env:PLUGIN_ROOT 'bin/sdk-utils.psm1')
 
 # Generate handler code from a schema file
 $SCHEMA = Get-Content "my-tool-schema.json" -Raw
@@ -158,15 +156,20 @@ sdk-generate-handler "$SCHEMA" bash > my-handlers.sh
 
 ## Integration with SDK Entry Points
 
-The `shebang-mcp-sdk.sh` and `shebang-mcp-sdk.ps1` entry points source `sdk-utils.sh`/`sdk-utils.psm1` automatically, so consumers who want to use `sdk-generate-handler` can do so without additional setup:
+The `shebang-mcp-sdk.sh` and `shebang-mcp-sdk.ps1` runtime entry points deliberately do **not** load the development utilities. Source `sdk-utils.sh` or import `sdk-utils.psm1` explicitly in a development shell before calling `sdk-generate-handler`; pregenerated handlers do not need either utility at runtime.
 
 ```bash
-# sdk-utils.sh is automatically sourced by shebang-mcp-sdk.sh
-./bin/shebang-mcp-sdk.sh --stdio
-# sdk-generate-handler is available if you source sdk-utils.sh directly
+# Development-time generation only
+. "${PLUGIN_ROOT}/bin/sdk-utils.sh"
+sdk-generate-handler "$SCHEMA" bash > my-handlers.sh
 ```
 
-For generated consumer projects, consumers should source `sdk-utils.sh` or import `sdk-utils.psm1` in their own startup scripts before calling `sdk-generate-handler`.
+```powershell
+# Development-time generation only
+Import-Module (Join-Path $env:PLUGIN_ROOT 'bin/sdk-utils.psm1')
+sdk-generate-handler -Schema $SCHEMA -Language pwsh |
+    Set-Content -LiteralPath my-handlers.ps1
+```
 
 ## See Also
 

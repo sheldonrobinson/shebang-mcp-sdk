@@ -9,9 +9,9 @@
 # Dual-mode: Works as both an MCP server (stdio/streamable-http) and a CLI tool.
 # In CLI mode, consumers can invoke tools directly without the MCP protocol.
 #
-# Development utilities (sdk-utils.sh) are optionally sourced for sdk-generate-handler.
-# sdk-utils.sh is NOT part of the core runtime and should not be bundled with consumer
-# MCP servers — it is only needed during development/code-generation.
+# Development utilities (sdk-utils.sh) are deliberately not loaded by this
+# runtime entry point. Consumers developing handlers can invoke sdk-utils.sh
+# directly or source it explicitly in a development shell.
 #
 # Usage:
 #   ./bin/shebang-mcp-sdk.sh                # stdio MCP server (default)
@@ -37,42 +37,123 @@ export PLUGIN_ROOT
 # Mark SDK as sourced to prevent mcp-sdk.sh from auto-running its own main
 MCP_SDK_SOURCED="true"
 
-# Source the generic MCP SDK (core runtime — included in consumer bundles)
+# Source only the generic MCP SDK core runtime. sdk-utils.sh is a development
+# tool and must be sourced explicitly when code generation is wanted.
 . "${PLUGIN_ROOT}/bin/mcp-sdk.sh"
 
-# Optionally source SDK utilities (dev-time only — NOT bundled with consumers)
-# Consumers who need sdk-generate-handler can source sdk-utils.sh directly:
-#   . "${PLUGIN_ROOT}/bin/sdk-utils.sh"
-if [ -f "${PLUGIN_ROOT}/bin/sdk-utils.sh" ]; then
-    . "${PLUGIN_ROOT}/bin/sdk-utils.sh"
-fi
-
 # --- CLI mode helpers -------------------------------------------------------
+# Print a JSON-RPC error response unchanged and return nonzero. Malformed or
+# result-less responses are also failures rather than successful CLI commands.
+cli_validate_response() {
+    _cli_check_response="${1:-}"
+    _cli_check_operation="${2:-request}"
+
+    if ! printf '%s' "${_cli_check_response}" | jq -e \
+        'type == "object" and .jsonrpc == "2.0" and (has("result") or has("error"))' \
+        >/dev/null 2>&1; then
+        printf 'Error: %s returned an invalid JSON-RPC response\n' "${_cli_check_operation}" >&2
+        if [ -n "${_cli_check_response}" ]; then
+            printf '%s\n' "${_cli_check_response}" >&2
+        fi
+        return 1
+    fi
+
+    if printf '%s' "${_cli_check_response}" | jq -e '.error != null' >/dev/null 2>&1; then
+        printf '%s\n' "${_cli_check_response}"
+        return 1
+    fi
+
+    if ! printf '%s' "${_cli_check_response}" | jq -e 'has("result")' >/dev/null 2>&1; then
+        printf 'Error: %s returned no result\n' "${_cli_check_operation}" >&2
+        return 1
+    fi
+    return 0
+}
+
+cli_initialize() {
+    _cli_init_req=$(jq -cn \
+        --arg protocol "${MCP_PROTOCOL_VERSION:-2025-03-26}" \
+        '{jsonrpc:"2.0",id:1,method:"initialize",params:{protocolVersion:$protocol,capabilities:{},clientInfo:{name:"cli",version:"1.0"}}}') || {
+        printf 'Error: could not construct initialize request\n' >&2
+        return 1
+    }
+
+    if ! _cli_init_resp=$(process_mcp_line "${_cli_init_req}"); then
+        printf 'Error: initialize request failed\n' >&2
+        if [ -n "${_cli_init_resp:-}" ]; then
+            printf '%s\n' "${_cli_init_resp}" >&2
+        fi
+        return 1
+    fi
+    cli_validate_response "${_cli_init_resp}" "initialize"
+}
+
 cli_list_tools() {
-    # Build a minimal initialize + tools/list request and dispatch it
-    local req
-    req='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"cli","version":"1.0"}}}'
-    local resp
-    resp=$(process_mcp_line "$req")
-    # Now request tools/list
-    req='{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
-    resp=$(process_mcp_line "$req")
-    printf '%s\n' "$resp" | jq -r '.result.tools[] | "\(.name) — \(.description // "no description")"' 2>/dev/null || \
-        printf '%s\n' "$resp"
+    if ! cli_initialize; then
+        return 1
+    fi
+
+    _cli_list_req=$(jq -cn '{jsonrpc:"2.0",id:2,method:"tools/list",params:{}}') || {
+        printf 'Error: could not construct tools/list request\n' >&2
+        return 1
+    }
+    if ! _cli_list_resp=$(process_mcp_line "${_cli_list_req}"); then
+        printf 'Error: tools/list request failed\n' >&2
+        if [ -n "${_cli_list_resp:-}" ]; then
+            printf '%s\n' "${_cli_list_resp}" >&2
+        fi
+        return 1
+    fi
+    if ! cli_validate_response "${_cli_list_resp}" "tools/list"; then
+        return 1
+    fi
+    if ! printf '%s' "${_cli_list_resp}" | jq -e '.result.tools | type == "array"' >/dev/null 2>&1; then
+        printf 'Error: tools/list result does not contain a tools array\n' >&2
+        printf '%s\n' "${_cli_list_resp}" >&2
+        return 1
+    fi
+
+    printf '%s' "${_cli_list_resp}" | jq -r \
+        '.result.tools[] | "\(.name) — \(.description // "no description")"'
 }
 
 cli_call_tool() {
-    local tool_name="${1:-}"
-    local tool_args="${2:-"{}"}"
-    if [ -z "$tool_name" ]; then
-        echo "Error: --call-tool requires a tool name" >&2
+    _cli_tool_name="${1:-}"
+    _cli_tool_args="${2-"{}"}"
+    if [ -z "${_cli_tool_name}" ]; then
+        printf 'Error: --call-tool requires a tool name\n' >&2
         return 1
     fi
-    local req
-    req=$(printf '{"jsonrpc":"2.0","id":3,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"cli","version":"1.0"}}}')
-    process_mcp_line "$req" >/dev/null 2>&1 || true
-    req=$(printf '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"%s","arguments":%s}}' "$tool_name" "$tool_args")
-    process_mcp_line "$req"
+
+    # A tools/call arguments value must be exactly one JSON object. Slurping
+    # rejects empty input and streams containing multiple JSON values as well.
+    if ! _cli_args_json=$(printf '%s' "${_cli_tool_args}" | jq -ce -s \
+        'if length == 1 and (.[0] | type == "object") then .[0] else error("arguments must be a single JSON object") end'); then
+        printf 'Error: --call-tool arguments must be a single JSON object\n' >&2
+        return 2
+    fi
+    if ! cli_initialize; then
+        return 1
+    fi
+
+    _cli_call_req=$(jq -cn \
+        --arg name "${_cli_tool_name}" \
+        --argjson arguments "${_cli_args_json}" \
+        '{jsonrpc:"2.0",id:4,method:"tools/call",params:{name:$name,arguments:$arguments}}') || {
+        printf 'Error: could not construct tools/call request\n' >&2
+        return 1
+    }
+    if ! _cli_call_resp=$(process_mcp_line "${_cli_call_req}"); then
+        printf 'Error: tools/call request failed\n' >&2
+        if [ -n "${_cli_call_resp:-}" ]; then
+            printf '%s\n' "${_cli_call_resp}" >&2
+        fi
+        return 1
+    fi
+    if ! cli_validate_response "${_cli_call_resp}" "tools/call"; then
+        return 1
+    fi
+    printf '%s\n' "${_cli_call_resp}"
 }
 
 # --- Main entry point -------------------------------------------------------
@@ -113,11 +194,21 @@ case "${0##*/}" in
             fi
             case "${1}" in
                 --list-tools|list-tools)
-                    cli_list_tools
+                    if cli_list_tools; then
+                        exit 0
+                    else
+                        _cli_exit_status=$?
+                        exit "${_cli_exit_status}"
+                    fi
                     ;;
                 --call-tool|call-tool)
                     shift
-                    cli_call_tool "${1:-}" "${2:-"{}"}"
+                    if cli_call_tool "${1:-}" "${2-"{}"}"; then
+                        exit 0
+                    else
+                        _cli_exit_status=$?
+                        exit "${_cli_exit_status}"
+                    fi
                     ;;
                 *)
                     echo "Unknown CLI command: ${1}" >&2
@@ -125,7 +216,6 @@ case "${0##*/}" in
                     exit 1
                     ;;
             esac
-            exit 0
         else
             echo "shebang-mcp-sdk: Unknown argument: $1" >&2
             echo "Usage: $0 [--stdio|--streamable-http|--cli] [--port PORT] [--host HOST]"

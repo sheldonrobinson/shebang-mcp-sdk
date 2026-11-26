@@ -35,12 +35,11 @@
     "type": "binary",
     "entry_point": "bin/shebang-mcp-sdk.sh",
     "mcp_config": {
-      "command": "bash",
+      "command": "sh",
       "args": [
         "-c",
-        "command -v jq >/dev/null 2>&1 || { for d in /opt/homebrew/bin /usr/local/bin; do [ -d \"$d\" ] && [ \"${PATH#*$d}\" = \"$PATH\" ] && PATH=\"$d:$PATH\"; done; export PATH; }; exec bash \"$0\" \"$@\"",
-        "${__dirname}/bin/script-runner.sh",
-        "shebang-mcp-sdk",
+        "command -v jq >/dev/null 2>&1 || { for d in /opt/homebrew/bin /usr/local/bin; do [ -d \"$d\" ] && [ \"${PATH#*$d}\" = \"$PATH\" ] && PATH=\"$d:$PATH\"; done; export PATH; }; exec sh \"$0\" \"$@\"",
+        "${__dirname}/bin/shebang-mcp-sdk.sh",
         "--stdio"
       ],
       "env": {

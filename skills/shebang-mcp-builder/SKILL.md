@@ -2,7 +2,7 @@
 name: shebang-mcp-builder
 description: "Shebang MCP Builder Skill — the Model Context Protocol (MCP) SDK for shell environments (POSIX sh/Bash & PowerShell), analogous to python-sdk for Python and @modelcontextprotocol/sdk for TypeScript. Contains NO application-specific logic — consumers override tool handlers via global functions. Integrates with the MCP Builder Skill for building production MCP servers."
 license: MIT
-compatibility: Windows requires PowerShell 5.1+ or pwsh 7+. Linux/macOS requires Bash 4+, jq, and socat or nc (for streamable-http).
+compatibility: Windows requires PowerShell 5.1+ or pwsh 7+. Linux/macOS requires POSIX sh, jq, and socat or nc (for streamable-http).
 metadata:
   author: sheldonrobinson
   author-email: sheldon.robinson@gmail.com
@@ -30,6 +30,15 @@ Per the [Agent Skills Specification](https://agentskills.io/specification), inst
   Copy-Item -Recurse -Force skills/shebang-mcp-builder .agents/skills/shebang-mcp-builder
   ```
 
+This copies only the discoverable skill, not the SDK runtime. Set `PLUGIN_ROOT` to a full shebang-mcp-sdk checkout containing `bin/` before running setup, generation, or server commands:
+
+```bash
+export PLUGIN_ROOT=/absolute/path/to/shebang-mcp-sdk
+```
+```powershell
+$env:PLUGIN_ROOT = 'C:\path\to\shebang-mcp-sdk'
+```
+
 ## 1. Platform Selection Rules (Windows vs. Linux/macOS)
 
 The SDK implementation is **OS-specific**:
@@ -49,17 +58,21 @@ The SDK implementation is **OS-specific**:
 ### stdio mode (default)
 ```bash
 # Linux / macOS (Bash)
-./bin/script-runner.sh shebang-mcp-sdk --stdio
+./bin/shebang-mcp-sdk.sh --stdio
+```
 
+```powershell
 # Windows (PowerShell)
-pwsh -NoProfile -ExecutionPolicy Bypass -File .\bin\script-runner.ps1 --use-pwsh shebang-mcp-sdk --stdio
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\bin\shebang-mcp-sdk.ps1 --stdio
 ```
 
 ### streamable-http mode
 ```bash
 # Linux / macOS (Bash)
 ./bin/shebang-mcp-sdk.sh --streamable-http --host 127.0.0.1 --port 8080 --listen
+```
 
+```powershell
 # Windows (PowerShell)
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\bin\shebang-mcp-sdk.ps1 --streamable-http --port 8080
 ```
@@ -73,7 +86,9 @@ Both entry points support a `--cli` mode that lets you invoke tools directly wit
 
 # Call a specific tool
 ./bin/shebang-mcp-sdk.sh --cli --call-tool my_tool '{"arg":"value"}'
+```
 
+```powershell
 # Windows (PowerShell)
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\bin\shebang-mcp-sdk.ps1 --cli --ListTools
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\bin\shebang-mcp-sdk.ps1 --cli --CallTool my_tool '{"arg":"value"}'
@@ -98,7 +113,7 @@ The SDK is **strictly generic** — it contains no application-specific logic. C
 
 ### MCP Concepts Supported
 
-The SDK supports all four MCP concept types:
+The SDK provides tool, resource, prompt, and transport extension points. Resources and prompts are opt-in: the core routes their requests to the dedicated handlers below and advertises the corresponding `resources` or `prompts` capability only when the consumer provides those handlers. An unextended generic server does not automatically advertise or provide them.
 
 | Concept | MCP Method | Bash Handler | PowerShell Handler |
 |---|---|---|---|
@@ -127,7 +142,7 @@ handle_tools_call() {
     local id="$1"
     local params="${2:-"{}"}"
     # ... handle the call ...
-    json_response "${id}" '{"result":"ok"}'
+    json_response "${id}" "$(mcp_tool_result "ok" false)"
 }
 
 # --- Resources ---
@@ -169,8 +184,9 @@ handle_get_prompt() {
     local name
     name=$(printf '%s' "$params" | jq -r '.name // ""')
     local result
-    result=$(jq -cn --arg name "$name" --arg messages '[{"role":"user","content":"Review this code"}]' \
-        '{description:"Prompt for $name",messages:$messages}')
+    result=$(jq -cn --arg name "$name" \
+        --argjson messages '[{"role":"user","content":{"type":"text","text":"Review this code"}}]' \
+        '{description:("Prompt for " + $name),messages:$messages}')
     json_response "${id}" "${result}"
 }
 
@@ -196,7 +212,7 @@ function global:Handle-ListTools {
 function global:Handle-ToolsCall {
     param($Id, [System.Collections.IDictionary]$Params = @{})
     # ... handle tool call ...
-    return json-response -Id $Id -Result @{ result = "ok" }
+    return json-response -Id $Id -Result (New-McpToolResult -Text 'ok')
 }
 
 # --- Resources ---
@@ -234,7 +250,7 @@ function global:Invoke-McpCustomMethod {
 
 ## 5. Development Utilities (`sdk-utils.sh` / `sdk-utils.psm1`)
 
-**These are dev-time utilities only — they are NOT part of the core MCP SDK runtime and should NOT be bundled with generated consumer MCP servers.**
+**These are dev-time utilities only — they are NOT part of the core MCP SDK runtime and should NOT be bundled with generated consumer MCP servers.** They are included in the full SDK checkout and SDK MCPB distributions for development use; pregenerated consumer handlers do not require them at runtime.
 
 The `sdk-utils.sh` (Bash) and `sdk-utils.psm1` (PowerShell) files contain `sdk-generate-handler`, a language-agnostic code generation function that takes a tool schema (JSON) and emits ready-to-use handler code.
 
@@ -245,38 +261,46 @@ The `sdk-utils.sh` (Bash) and `sdk-utils.psm1` (PowerShell) files contain `sdk-g
 . "${PLUGIN_ROOT}/bin/sdk-utils.sh"
 
 # Generate Bash handler code from a tool schema
-sdk-generate-handler '{"name":"my_tool","description":"Processes data","parameters":[{"name":"input","type":"string","required":true}]}'
+sdk-generate-handler '{"server":{},"tools":[{"name":"my_tool","description":"Processes data","parameters":[{"name":"input","type":"string","required":true}]}]}' bash
 
 # Source the generated code into your consumer script
-. <(sdk-generate-handler '{"name":"my_tool",...}')
+. <(sdk-generate-handler '{"server":{},"tools":[{"name":"my_tool","description":"Processes data"}]}' bash)
 ```
 
 ```powershell
 # Import sdk-utils.psm1 into your development session
-Import-Module "${PLUGIN_ROOT}/bin/sdk-utils.psm1"
+Import-Module (Join-Path $env:PLUGIN_ROOT 'bin/sdk-utils.psm1')
 
 # Generate PowerShell handler code
-sdk-generate-handler -Schema '{"name":"my_tool","description":"Processes data"}' -Language pwsh
+sdk-generate-handler -Schema '{"server":{},"tools":[{"name":"my_tool","description":"Processes data"}]}' -Language pwsh
 
 # Generate Bash handler code
-sdk-generate-handler -Schema '{"name":"my_tool",...}' -Language bash
+sdk-generate-handler -Schema '{"server":{},"tools":[{"name":"my_tool","description":"Processes data"}]}' -Language bash
 
-# Dot-source the generated code
-. <(sdk-generate-handler -Schema '{"name":"my_tool",...}' -Language pwsh)
+# Write and dot-source generated PowerShell code (no Bash process substitution)
+$handlerPath = Join-Path (Get-Location) 'my-handlers.ps1'
+sdk-generate-handler -Schema '{"server":{},"tools":[{"name":"my_tool","description":"Processes data"}]}' -Language pwsh |
+    Set-Content -LiteralPath $handlerPath
+. $handlerPath
 ```
 
 ### Schema Format
 
 ```json
 {
-  "name": "tool_name",
-  "description": "Human-readable description",
-  "parameters": [
+  "server": {},
+  "tools": [
     {
-      "name": "param_name",
-      "type": "string",
-      "description": "Parameter description",
-      "required": true
+      "name": "tool_name",
+      "description": "Human-readable description",
+      "parameters": [
+        {
+          "name": "param_name",
+          "type": "string",
+          "description": "Parameter description",
+          "required": true
+        }
+      ]
     }
   ]
 }
@@ -318,8 +342,8 @@ These functions are used internally by the SDK and may change between versions. 
 | `Invoke-Mcp-StreamableHttp-Server` internal loop | — | HTTPListener server loop |
 | `check-http-available` | — | HTTP availability check |
 | `extract-jsonrpc-from-post` | — | Extract JSON-RPC from POST body |
-| `Mcp-Generate-Session-Id` / `mcp_generate_session_id` | — | Session ID generation |
-| `Handle-Http-Request-Stream` / `handle_http_request_stream` | — | Raw HTTP request stream parsing |
+| `New-McpHttpSession` / `mcp_generate_session_id` | — | HTTP session creation and session ID generation |
+| `handle_http_request_stream` (Bash only) | — | Bash raw HTTP request stream parsing; PowerShell request processing is in `Invoke-Mcp-StreamableHttp-Server` above |
 
 ### Development Utilities (Dev-Time Only)
 
@@ -359,10 +383,10 @@ The MCP Builder Skill (from [anthropics/skills](https://github.com/anthropics/sk
 The SDK implements the [Model Context Protocol specification](https://modelcontextprotocol.io) including:
 
 - JSON-RPC 2.0 message framing
-- Server capabilities advertisement
+- Conditional server capabilities advertisement based on available consumer handlers
 - Tool discovery and invocation
-- Resource listing and reading
-- Prompt listing and retrieval
+- Optional resource listing and reading through dedicated resource handlers
+- Optional prompt listing and retrieval through dedicated prompt handlers
 - Standard error codes
 - stdio and streamable-http transports
 - Session management (Mcp-Session-Id)
@@ -371,5 +395,7 @@ The SDK implements the [Model Context Protocol specification](https://modelconte
 ## Bundled Resources
 - `references/spec-template.md` - Specification template for MCP servers built on this SDK
 - `references/checklist.md` - Quality & review checklist for MCP server implementations
+- `references/schema-reference.md` - Generator catalog fields, types, and usage
+- `references/schema.example.json` - Complete generator-accepted catalog example
 - `scripts/setup-sdk.sh` / `scripts/setup-sdk.ps1` - SDK setup & info script
 - `bin/package-mcpb.sh` / `bin/package-mcpb.ps1` - MCPB bundle builder for Official MCP Registry distribution

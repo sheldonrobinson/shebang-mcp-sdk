@@ -1,5 +1,4 @@
 {
-  "$schema": "https://sheldonrobinson.github.io/shebang-mcp-sdk/schemas/tool-schema.json",
   "version": "1.0.0",
   "server": {
     "name": "my-mcp-server",

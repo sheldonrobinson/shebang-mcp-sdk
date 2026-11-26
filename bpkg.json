@@ -1,3 +1,0 @@
-# basher package manifest (https://github.com/basherpm/basher)
-BINS="bin/shebang-mcp-sdk.sh:bin/mcp-sdk.sh:bin/script-runner:bin/script-runner.sh:bin/package-mcpb.sh"
-DEPS=""

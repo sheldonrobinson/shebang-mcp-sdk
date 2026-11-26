@@ -8,6 +8,13 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PLUGIN_ROOT="${PLUGIN_ROOT:-$(cd "${SCRIPT_DIR}/../../.." 2>/dev/null && pwd || pwd)}"
 export PLUGIN_ROOT
 
+if [ ! -d "${PLUGIN_ROOT}/bin" ]; then
+  echo "SDK runtime not found: ${PLUGIN_ROOT}/bin" >&2
+  echo "A skill-only copy does not install the SDK runtime." >&2
+  echo "Set PLUGIN_ROOT to a full shebang-mcp-sdk checkout or extracted MCPB containing bin/, then rerun this script." >&2
+  exit 1
+fi
+
 while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help)
@@ -15,7 +22,7 @@ while [ $# -gt 0 ]; do
 Shebang MCP SDK - Setup Script
 
 USAGE:
-  skills/shebang-mcp-sdk/scripts/setup-sdk.sh [OPTIONS]
+  skills/shebang-mcp-builder/scripts/setup-sdk.sh [OPTIONS]
 
 OPTIONS:
   --info         Show SDK installation information
@@ -27,16 +34,14 @@ HELP_EOF
     --info)
       echo "Shebang MCP SDK"
       echo "  Plugin root: ${PLUGIN_ROOT}"
-      echo "  SDK Bash:    ${PLUGIN_ROOT}/bin/mcp-sdk.sh"
-      echo "  SDK PowerShell: ${PLUGIN_ROOT}/bin/mcp-sdk.psm1"
+      echo "  SDK sh:      ${PLUGIN_ROOT}/bin/mcp-sdk.sh"
       echo "  Server (sh): ${PLUGIN_ROOT}/bin/shebang-mcp-sdk.sh"
-      echo "  Server (pwsh): ${PLUGIN_ROOT}/bin/shebang-mcp-sdk.ps1"
-      echo "  Runner:      ${PLUGIN_ROOT}/bin/script-runner"
+      echo "  Runner (sh): ${PLUGIN_ROOT}/bin/script-runner.sh"
       exit 0
       ;;
     --check)
       missing=0
-      for f in bin/mcp-sdk.sh bin/shebang-mcp-sdk.sh bin/script-runner; do
+      for f in bin/mcp-sdk.sh bin/shebang-mcp-sdk.sh bin/script-runner.sh; do
         if [ -f "${PLUGIN_ROOT}/${f}" ]; then
           echo "OK: ${f}"
         else
@@ -55,6 +60,7 @@ HELP_EOF
       exit 1
       ;;
   esac
+  shift
 done
 
 # Default: show info
@@ -62,5 +68,5 @@ echo "Shebang MCP SDK v1.0.0"
 echo "Plugin root: ${PLUGIN_ROOT}"
 echo ""
 echo "Usage:"
-echo "  ./bin/script-runner.sh shebang-mcp-sdk --stdio"
-echo "  ./bin/shebang-mcp-sdk.sh --streamable-http --port 8080"
+echo "  sh ./bin/shebang-mcp-sdk.sh --stdio"
+echo "  sh ./bin/shebang-mcp-sdk.sh --streamable-http --port 8080"

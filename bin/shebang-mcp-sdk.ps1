@@ -3,7 +3,7 @@
 #
 # Starts the generic Shebang MCP SDK server over stdio or streamable-http transport.
 # This server implements the core Model Context Protocol (MCP) specification and
-# contains NO application-specific logic — consumers override tool handlers via
+# contains NO application-specific logic; consumers override tool handlers via
 # global functions (Handle-ListTools, Handle-ToolsCall, Invoke-McpCustomMethod).
 #
 # Dual-mode: Works as both an MCP server (stdio/streamable-http) and a CLI tool.
@@ -11,7 +11,7 @@
 #
 # Development utilities (sdk-utils.psm1) are optionally imported for sdk-generate-handler.
 # sdk-utils.psm1 is NOT part of the core runtime and should not be bundled with consumer
-# MCP servers — it is only needed during development/code-generation.
+# MCP servers; it is only needed during development/code-generation.
 #
 # Usage:
 #   pwsh -NoProfile -ExecutionPolicy Bypass -File .\bin\shebang-mcp-sdk.ps1               # stdio MCP server (default)
@@ -32,100 +32,213 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$PluginRoot = if ($env:PLUGIN_ROOT) { $env:PLUGIN_ROOT } else { (Resolve-Path (Join-Path $ScriptDir "..")).Path }
+$PluginRoot = if ($env:PLUGIN_ROOT) { $env:PLUGIN_ROOT } else { (Resolve-Path (Join-Path $ScriptDir '..')).Path }
 $env:PLUGIN_ROOT = $PluginRoot
 
-# Import the generic MCP SDK module (core runtime — included in consumer bundles)
-Import-Module -LiteralPath (Join-Path $PluginRoot 'bin\mcp-sdk.psm1') -Force -ErrorAction Stop
+# Import the generic MCP SDK module (core runtime; included in consumer bundles)
+Import-Module -Name (Join-Path $PluginRoot 'bin\mcp-sdk.psm1') -Force -DisableNameChecking -ErrorAction Stop
 
-# Optionally import SDK utilities (dev-time only — NOT bundled with consumers)
-# Consumers who need sdk-generate-handler can import sdk-utils.psm1 directly:
-#   Import-Module "${PLUGIN_ROOT}/bin/sdk-utils.psm1"
-if (Test-Path -LiteralPath (Join-Path $PluginRoot 'bin\sdk-utils.psm1')) {
-    Import-Module -LiteralPath (Join-Path $PluginRoot 'bin\sdk-utils.psm1') -Force -ErrorAction SilentlyContinue
-}
+# Development utilities are deliberately not imported by the runtime. Consumers
+# developing handlers can import bin/sdk-utils.psm1 in a separate generator script.
 
 # --- CLI mode helpers -------------------------------------------------------
-function cli-list-tools {
-    # Build a minimal initialize + tools/list request and dispatch it
-    $req = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"cli","version":"1.0"}}}'
-    $resp = process-mcp-line -Message $req
-    # Now request tools/list
-    $req = '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
-    $resp = process-mcp-line -Message $req
-    $parsed = $resp | ConvertFrom-Json -ErrorAction SilentlyContinue
-    if ($null -ne $parsed -and $parsed.result -and $parsed.result.tools) {
-        foreach ($t in $parsed.result.tools) {
-            Write-Output ("{0} — {1}" -f $t.name, if ($t.description) { $t.description } else { "no description" })
+function New-CliMcpRequest {
+    param(
+        [int]$Id,
+        [string]$Method,
+        [object]$Params
+    )
+
+    $request = [ordered]@{
+        jsonrpc = '2.0'
+        id      = $Id
+        method  = $Method
+        params  = $Params
+    }
+    return ($request | ConvertTo-Json -Depth 32 -Compress)
+}
+
+function Invoke-CliMcpRequest {
+    param(
+        [int]$Id,
+        [string]$Method,
+        [object]$Params
+    )
+
+    $request = New-CliMcpRequest -Id $Id -Method $Method -Params $Params
+    $response = process-mcp-line -line $request
+    if ([string]::IsNullOrWhiteSpace([string]$response)) {
+        throw "MCP request '$Method' returned no response."
+    }
+
+    try {
+        $parsed = [string]$response | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+        throw "MCP request '$Method' returned invalid JSON: $($_.Exception.Message)"
+    }
+
+    $errorProperty = $parsed.PSObject.Properties['error']
+    if ($null -ne $errorProperty -and $null -ne $errorProperty.Value) {
+        $mcpError = $errorProperty.Value
+        $messageProperty = $mcpError.PSObject.Properties['message']
+        $message = if ($null -ne $messageProperty) { [string]$messageProperty.Value } else { [string]$response }
+        throw "MCP request '$Method' failed: $message"
+    }
+
+    return [PSCustomObject]@{
+        Raw     = [string]$response
+        Message = $parsed
+    }
+}
+
+function Initialize-CliSession {
+    $protocolVersion = if ($env:MCP_PROTOCOL_VERSION) { $env:MCP_PROTOCOL_VERSION } else { '2025-03-26' }
+    $params = [ordered]@{
+        protocolVersion = $protocolVersion
+        capabilities    = @{}
+        clientInfo      = [ordered]@{
+            name    = 'cli'
+            version = '1.0'
         }
-    } else {
-        Write-Output $resp
+    }
+    $response = Invoke-CliMcpRequest -Id 1 -Method 'initialize' -Params $params
+    if ($null -eq $response.Message.PSObject.Properties['result']) {
+        throw 'MCP initialize returned no result.'
+    }
+}
+
+function cli-list-tools {
+    Initialize-CliSession
+    $response = Invoke-CliMcpRequest -Id 2 -Method 'tools/list' -Params @{}
+    $resultProperty = $response.Message.PSObject.Properties['result']
+    if ($null -eq $resultProperty -or $null -eq $resultProperty.Value) {
+        throw 'MCP tools/list returned no result.'
+    }
+
+    $toolsProperty = $resultProperty.Value.PSObject.Properties['tools']
+    if ($null -eq $toolsProperty) {
+        throw 'MCP tools/list returned no tools collection.'
+    }
+
+    foreach ($tool in @($toolsProperty.Value)) {
+        $descriptionProperty = $tool.PSObject.Properties['description']
+        $description = if ($null -ne $descriptionProperty -and -not [string]::IsNullOrWhiteSpace([string]$descriptionProperty.Value)) {
+            [string]$descriptionProperty.Value
+        }
+        else {
+            'no description'
+        }
+        Write-Output ('{0} - {1}' -f $tool.name, $description)
     }
 }
 
 function cli-call-tool {
-    param([string]$ToolName, [string]$ToolArgs = "{}")
+    param(
+        [string]$ToolName,
+        [string]$ToolArgs = '{}'
+    )
+
     if ([string]::IsNullOrWhiteSpace($ToolName)) {
-        Write-Error "Error: --CallTool requires a tool name"
-        return 1
+        throw '--CallTool requires a tool name.'
     }
-    $req = '{"jsonrpc":"2.0","id":3,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"cli","version":"1.0"}}}'
-    process-mcp-line -Message $req > $null 2>&1 || true
-    $req = ('{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"{0}","arguments":{1}}}' -f $ToolName, $ToolArgs)
-    process-mcp-line -Message $req
+
+    try {
+        $parsedArgs = ConvertFrom-Json -InputObject $ToolArgs -ErrorAction Stop
+    }
+    catch {
+        throw "--CallTool arguments must be valid JSON: $($_.Exception.Message)"
+    }
+    if ($parsedArgs -isnot [System.Management.Automation.PSCustomObject] -and
+        $parsedArgs -isnot [System.Collections.IDictionary]) {
+        throw '--CallTool arguments must be a JSON object.'
+    }
+
+    Initialize-CliSession
+    $params = [ordered]@{
+        name      = $ToolName
+        arguments = $parsedArgs
+    }
+    $response = Invoke-CliMcpRequest -Id 4 -Method 'tools/call' -Params $params
+    Write-Output $response.Raw
 }
 
 # --- Main entry point -------------------------------------------------------
-$pipedLines = @($input)
+# MCP stdio must stream from open stdin. Do not enumerate the automatic $input
+# variable or pipe collected lines into Start-McpServer on these paths.
 if ($args.Count -eq 0) {
-    if ($pipedLines.Count -gt 0) { $pipedLines | Start-McpServer } else { Start-McpServer }
+    Start-McpServer
     exit 0
 }
-elseif ($args[0] -eq '--stdio') {
-    if ($pipedLines.Count -gt 0) { $pipedLines | Start-McpServer -Transport 'stdio' } else { Start-McpServer -Transport 'stdio' }
+elseif ($args[0] -eq '--stdio' -or $args[0] -eq '-Stdio') {
+    Start-McpServer -Transport 'stdio'
     exit 0
 }
 elseif ($args[0] -eq '--http' -or $args[0] -eq '--streamable-http') {
-    $port = 8080
-    $hostName = '127.0.0.1'
-    $endpoint = '/mcp'
+    $port = if ($env:MCP_HTTP_PORT) { [int]$env:MCP_HTTP_PORT } else { 8080 }
+    $hostName = if ($env:MCP_HTTP_HOST) { $env:MCP_HTTP_HOST } else { '127.0.0.1' }
+    $endpoint = if ($env:MCP_HTTP_ENDPOINT) { $env:MCP_HTTP_ENDPOINT } else { '/mcp' }
     for ($i = 1; $i -lt $args.Count; $i++) {
-        if ($args[$i] -eq '--port' -and ($i + 1) -lt $args.Count) { $port = [int]$args[++$i] }
-        elseif ($args[$i] -eq '--host' -and ($i + 1) -lt $args.Count) { $hostName = [string]$args[++$i] }
-        elseif ($args[$i] -eq '--endpoint' -and ($i + 1) -lt $args.Count) { $endpoint = [string]$args[++$i] }
-    }
-    Start-McpServer -Transport 'streamable-http' -HostName $hostName -Port $port
-    exit 0
-}
-elseif ($args[0] -eq '--cli') {
-    if ($args.Count -eq 1) {
-        Write-Output "shebang-mcp-sdk CLI mode"
-        Write-Output "Usage: pwsh -File .\bin\shebang-mcp-sdk.ps1 --cli --ListTools"
-        Write-Output "       pwsh -File .\bin\shebang-mcp-sdk.ps1 --cli --CallTool <tool_name> '<json_args>'"
-        exit 0
-    }
-    shift
-    $cmd = [string]$args[0]
-    switch ($cmd) {
-        { $_ -in @('--ListTools', 'ListTools', '--list-tools', 'list-tools') } {
-            cli-list-tools
+        if ($args[$i] -eq '--port' -and ($i + 1) -lt $args.Count) {
+            $port = [int]$args[++$i]
         }
-        { $_ -in @('--CallTool', 'CallTool', '--call-tool', 'call-tool') } {
-            shift
-            $toolName = [string]${args[0] -as [string[]] -or @($args)[0]}
-            $toolArgs = if ($args.Count -gt 1) { [string]${args[1] -as [string[]] -or @($args)[1]} } else { "{}" }
-            cli-call-tool -ToolName $toolName -ToolArgs $toolArgs
+        elseif ($args[$i] -eq '--host' -and ($i + 1) -lt $args.Count) {
+            $hostName = [string]$args[++$i]
         }
-        default {
-            Write-Error "Unknown CLI command: $cmd"
-            Write-Output "Available: --ListTools, --CallTool"
+        elseif ($args[$i] -eq '--endpoint' -and ($i + 1) -lt $args.Count) {
+            $endpoint = [string]$args[++$i]
+        }
+        else {
+            [Console]::Error.WriteLine("shebang-mcp-sdk: Invalid or incomplete HTTP argument: $($args[$i])")
             exit 1
         }
     }
+    Start-McpServer -Transport 'streamable-http' -HostName $hostName -Port $port -Endpoint $endpoint
     exit 0
+}
+elseif ($args[0] -eq '--cli') {
+    # Windows PowerShell otherwise writes CLI output with the legacy OEM code
+    # page, corrupting non-ASCII tool names and descriptions for subprocess
+    # consumers. Match the stdio transport's explicit UTF-8 output contract.
+    [System.Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+    if ($args.Count -eq 1) {
+        Write-Output 'shebang-mcp-sdk CLI mode'
+        Write-Output 'Usage: pwsh -File .\bin\shebang-mcp-sdk.ps1 --cli --ListTools'
+        Write-Output "       pwsh -File .\bin\shebang-mcp-sdk.ps1 --cli --CallTool <tool_name> '<json_args>'"
+        exit 0
+    }
+
+    try {
+        $cmd = [string]$args[1]
+        if ($cmd -in @('--ListTools', 'ListTools', '--list-tools', 'list-tools')) {
+            if ($args.Count -ne 2) {
+                throw "$cmd does not accept additional arguments."
+            }
+            cli-list-tools
+        }
+        elseif ($cmd -in @('--CallTool', 'CallTool', '--call-tool', 'call-tool')) {
+            if ($args.Count -lt 3) {
+                throw '--CallTool requires a tool name.'
+            }
+            if ($args.Count -gt 4) {
+                throw '--CallTool accepts only a tool name and one JSON object argument.'
+            }
+            $toolName = [string]$args[2]
+            $toolArgs = if ($args.Count -eq 4) { [string]$args[3] } else { '{}' }
+            cli-call-tool -ToolName $toolName -ToolArgs $toolArgs
+        }
+        else {
+            throw "Unknown CLI command: $cmd. Available: --ListTools, --CallTool"
+        }
+        exit 0
+    }
+    catch {
+        [Console]::Error.WriteLine("shebang-mcp-sdk: $($_.Exception.Message)")
+        exit 1
+    }
 }
 else {
     [Console]::Error.WriteLine("shebang-mcp-sdk: Unknown argument: $($args[0])")
-    [Console]::Error.WriteLine('Usage: pwsh -File .\bin\shebang-mcp-sdk.ps1 [--stdio|--streamable-http|--cli] [--port PORT] [--host HOST]')
+    [Console]::Error.WriteLine('Usage: pwsh -File .\bin\shebang-mcp-sdk.ps1 [--stdio|--streamable-http|--cli] [--port PORT] [--host HOST] [--endpoint PATH]')
     exit 1
 }

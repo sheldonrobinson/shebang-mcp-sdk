@@ -44,21 +44,30 @@ Per the [Agent Skills Specification](https://agentskills.io/specification), inst
 ```bash
 # Project-level (.agents/skills/) or User-level (~/.agents/skills/)
 mkdir -p .agents/skills
-cp -R skills/shebang-mcp-sdk .agents/skills/shebang-mcp-sdk
+cp -R skills/shebang-mcp-builder .agents/skills/shebang-mcp-builder
 ```
 ```powershell
 New-Item -ItemType Directory -Path .agents/skills -Force | Out-Null
-Copy-Item -Recurse -Force skills/shebang-mcp-sdk .agents/skills/shebang-mcp-sdk
+Copy-Item -Recurse -Force skills/shebang-mcp-builder .agents/skills/shebang-mcp-builder
+```
+
+This copies only the discoverable skill, not the SDK runtime. Set `PLUGIN_ROOT` to a full shebang-mcp-sdk checkout containing `bin/` before running setup, generation, or server commands:
+
+```bash
+export PLUGIN_ROOT=/absolute/path/to/shebang-mcp-sdk
+```
+```powershell
+$env:PLUGIN_ROOT = 'C:\path\to\shebang-mcp-sdk'
 ```
 
 ## OS-Specific MCP Servers (`mcp.json`)
 
 | MCP Server Name | OS / Runtime | Transport | Command / Endpoint |
 |---|---|---|---|
-| `shebang-mcp-sdk` | Cross-Platform (`script-runner`) | `stdio` | `./bin/script-runner shebang-mcp-sdk --stdio` |
-| `shebang-mcp-sdk-sh` | Linux / macOS (Bash) | `stdio` | `./bin/script-runner.sh --use-sh shebang-mcp-sdk --stdio` |
-| `shebang-mcp-sdk-pwsh` | Windows (PowerShell 7+) | `stdio` | `pwsh -NoProfile -ExecutionPolicy Bypass -File ${PLUGIN_ROOT}/bin/script-runner.ps1 --use-pwsh shebang-mcp-sdk --stdio` |
-| `shebang-mcp-sdk-powershell` | Windows (PowerShell 5.1) | `stdio` | `powershell.exe -NoProfile -ExecutionPolicy Bypass -File ${PLUGIN_ROOT}/bin/script-runner.ps1 --use-pwsh shebang-mcp-sdk --stdio` |
+| `shebang-mcp-sdk` | Linux / macOS (POSIX sh/Bash) | `stdio` | `sh ${PLUGIN_ROOT}/bin/shebang-mcp-sdk.sh --stdio` |
+| `shebang-mcp-sdk-sh` | Linux / macOS (with `jq` PATH bootstrap) | `stdio` | `sh ${PLUGIN_ROOT}/bin/shebang-mcp-sdk.sh --stdio` |
+| `shebang-mcp-sdk-pwsh` | Windows (PowerShell 7+) | `stdio` | `pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $env:PLUGIN_ROOT 'bin/shebang-mcp-sdk.ps1') --stdio` |
+| `shebang-mcp-sdk-powershell` | Windows (PowerShell 5.1) | `stdio` | `powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $env:PLUGIN_ROOT 'bin/shebang-mcp-sdk.ps1') --stdio` |
 | `shebang-mcp-sdk-http` | Cross-Platform | `streamable-http` | `http://127.0.0.1:8080/mcp` |
 
 ## Quick Start
@@ -66,11 +75,11 @@ Copy-Item -Recurse -Force skills/shebang-mcp-sdk .agents/skills/shebang-mcp-sdk
 ### 1. Start MCP Server (stdio mode)
 - **Linux / macOS (Bash):**
   ```bash
-  ./bin/script-runner.sh shebang-mcp-sdk --stdio
+  ./bin/shebang-mcp-sdk.sh --stdio
   ```
 - **Windows (PowerShell):**
   ```powershell
-  pwsh -NoProfile -ExecutionPolicy Bypass -File .\bin\script-runner.ps1 --use-pwsh shebang-mcp-sdk --stdio
+  pwsh -NoProfile -ExecutionPolicy Bypass -File .\bin\shebang-mcp-sdk.ps1 --stdio
   ```
 
 ### 2. Start Streamable HTTP Service
@@ -109,7 +118,7 @@ shebang-mcp-sdk/
 |   +-- manifest.sh.json              # MCPB manifest (Bash edition)
 |   +-- manifest.pwsh.json            # MCPB manifest (PowerShell edition)
 |   +-- mcp.template.json             # MCP server config template
-+-- skills/shebang-mcp-sdk/           # Agent Skills discovery mirror
++-- skills/shebang-mcp-builder/       # Agent Skills discovery mirror
 |   +-- SKILL.md                      # Skill metadata & instructions
 |   +-- references/
 |   |   +-- spec-template.md
@@ -125,8 +134,7 @@ shebang-mcp-sdk/
 +-- plugin.json                       # Agent Plugins v1.0.0 manifest
 +-- mcp.json                          # MCP Server configurations
 +-- server.json                       # Official MCP Registry manifest
-+-- bpkg.json                         # Basher package manifest
-+-- package.sh                        # Basher install script
++-- package.sh                        # Basher install script and BINS/DEPS metadata
 +-- LICENSE
 +-- README.md
 ```
@@ -138,7 +146,9 @@ The SDK is generic — consumers extend it by defining global functions:
 - **Bash:** `handle_list_tools`, `handle_tools_call`, `mcp_custom_method_handler`
 - **PowerShell:** `Handle-ListTools`, `Handle-ToolsCall`, `Invoke-McpCustomMethod`
 
-See `skills/shebang-mcp-sdk/SKILL.md` for the full consumer extension guide.
+Optional resources and prompts use the dedicated `handle_list_resources` / `handle_read_resource` and `handle_list_prompts` / `handle_get_prompt` handlers (or their PowerShell equivalents). The core advertises the corresponding capabilities only when consumers provide those handlers; they are not automatic features of every generic server.
+
+See `skills/shebang-mcp-builder/SKILL.md` for the full consumer extension guide.
 
 ## MCP Builder Skill Integration
 

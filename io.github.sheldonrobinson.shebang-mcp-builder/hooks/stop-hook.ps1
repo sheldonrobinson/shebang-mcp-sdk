@@ -12,7 +12,7 @@ $env:PLUGIN_ROOT = $PluginRoot
 # Import the MCP SDK for cleanup functions if available
 $SdkModule = Join-Path $PluginRoot 'bin\mcp-sdk.psm1'
 if (Test-Path -LiteralPath $SdkModule) {
-    Import-Module -LiteralPath $SdkModule -Force -ErrorAction SilentlyContinue
+    Import-Module -Name $SdkModule -Force -ErrorAction SilentlyContinue
 }
 
 # Close any active connections and clean up transport resources

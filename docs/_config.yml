@@ -1,0 +1,7 @@
+---
+title: shebang-mcp-sdk
+description: Shebang MCP SDK — The Model Context Protocol (MCP) SDK for shell environments (POSIX sh/Bash & PowerShell), analogous to python-sdk for Python and @modelcontextprotocol/sdk for TypeScript.
+show_downloads: true
+remote_theme: pages-themes/minimal@v0.2.0
+plugins:
+  - jekyll-include-cache
