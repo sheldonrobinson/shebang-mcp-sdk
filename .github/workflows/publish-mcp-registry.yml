@@ -62,10 +62,10 @@ jobs:
       - name: Upload MCPB artifacts to workflow run
         uses: actions/upload-artifact@v4
         with:
-          name: ralph-wiggum-loop-mcpb-${{ steps.meta.outputs.tag }}
+          name: shebang-mcp-builder-mcpb-${{ steps.meta.outputs.tag }}
           path: |
-            dist/ralph-wiggum-loop.sh.mcpb
-            dist/ralph-wiggum-loop.pwsh.mcpb
+            dist/shebang-mcp-builder.sh.mcpb
+            dist/shebang-mcp-builder.pwsh.mcpb
             server.json
 
       - name: Create or update GitHub Release with MCPB bundles
@@ -78,15 +78,15 @@ jobs:
           if gh release view "${TAG}" >/dev/null 2>&1; then
             echo "Uploading MCPB bundles to existing release ${TAG}..."
             gh release upload "${TAG}" \
-              dist/ralph-wiggum-loop.sh.mcpb \
-              dist/ralph-wiggum-loop.pwsh.mcpb \
+              dist/shebang-mcp-builder.sh.mcpb \
+              dist/shebang-mcp-builder.pwsh.mcpb \
               server.json \
               --clobber
           else
             echo "Creating GitHub release ${TAG} and uploading MCPB bundles..."
             gh release create "${TAG}" \
-              dist/ralph-wiggum-loop.sh.mcpb \
-              dist/ralph-wiggum-loop.pwsh.mcpb \
+              dist/shebang-mcp-builder.sh.mcpb \
+              dist/shebang-mcp-builder.pwsh.mcpb \
               server.json \
               --title "${TAG}" \
               --generate-notes
